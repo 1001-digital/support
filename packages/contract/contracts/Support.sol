@@ -485,33 +485,37 @@ contract Support {
         return string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
             '<rect width="400" height="400" fill="white"/>'
-            '<style>text{font-family:monospace;fill:black;text-transform:uppercase;font-size:12px}</style>'
-            '<text x="20" y="30">', projectName, '</text>'
-            '<text x="380" y="30" text-anchor="end">', _displayName(subscriberOf[tokenId]), '</text>',
+            '<style>.l{font-family:monospace;fill:#666;text-transform:uppercase;font-size:10px;font-weight:500}</style>'
+            '<text class="l" x="20" y="30">', projectName, ' SUPPORTERS</text>'
+            '<text class="l" x="380" y="30" text-anchor="end">', _displayName(subscriberOf[tokenId]), '</text>',
             _badge(displayTier),
-            '<text x="20" y="380">DAY ', _toString(dayNum), '</text>'
-            '<text x="200" y="380" text-anchor="middle">', active ? 'ACTIVE' : 'EXPIRED', '</text>'
-            '<text x="380" y="380" text-anchor="end">', _toString(dur), 'D</text>'
+            '<text class="l" x="20" y="380">DAY ', _toString(dayNum), '</text>'
+            '<text class="l" x="200" y="380" text-anchor="middle">', active ? 'ACTIVE' : 'EXPIRED', '</text>'
+            '<text class="l" x="380" y="380" text-anchor="end">', _toString(dur), 'D</text>'
             '</svg>'
         );
     }
 
-    /// @dev Returns the badge SVG for a tier. Edit paths here.
+    /// @dev Builds the center badge: rounded rect, logo left, tier name right.
     function _badge(uint8 tier) internal view returns (string memory) {
-        string memory paths;
-        if (tier == 0) {
-            paths = ''; // TODO: tier 0 badge paths
-        } else if (tier == 1) {
-            paths = ''; // TODO: tier 1 badge paths
-        } else if (tier == 2) {
-            paths = ''; // TODO: tier 2 badge paths
-        } else {
-            paths = ''; // TODO: tier 3 badge paths
-        }
+        string memory bg;
+        string memory tc;
+        string memory t;
+        uint256 w;
+
+        if (tier == 0)      { bg = '#DCDCDC'; tc = '#484848'; t = 'SUPPORTER'; w = 120; }
+        else if (tier == 1) { bg = '#A29C7A'; tc = '#fff';    t = 'GOLD';      w = 81;  }
+        else if (tier == 2) { bg = '#8B8F9A'; tc = '#fff';    t = 'PLATINUM';  w = 109; }
+        else                { bg = '#000';    tc = '#fff';    t = 'PARTNER';   w = 102; }
+
+        uint256 x = (400 - w) / 2;
+        uint256 textX = 26 + (w - 26) / 2; // center text in area right of logo
+
         return string.concat(
-            '<g transform="translate(200,200)">',
-            '<g transform="translate(-20,-20) scale(0.8)">', logo, '</g>',
-            paths,
+            '<g transform="translate(', _toString(x), ',184)">',
+            '<rect width="', _toString(w), '" height="32" rx="3" fill="', bg, '"/>',
+            '<g transform="translate(3,3)">', logo, '</g>',
+            '<text x="', _toString(textX), '" y="20" text-anchor="middle" font-family="monospace" font-size="12" font-weight="bold" fill="', tc, '">', t, '</text>',
             '</g>'
         );
     }
