@@ -16,14 +16,15 @@ export const subscription = onchainTable(
   }),
 );
 
-export const segment = onchainTable(
-  "segment",
+export const supportEvent = onchainTable(
+  "support_event",
   (t) => ({
     id: t.text().primaryKey(),
     tokenId: t.bigint().notNull(),
-    index: t.integer().notNull(),
     tier: t.integer().notNull(),
-    startedAt: t.bigint().notNull(),
+    duration: t.integer().notNull(),
+    paid: t.bigint().notNull(),
+    expiresAt: t.bigint().notNull(),
     block: t.bigint().notNull(),
     timestamp: t.bigint().notNull(),
   }),
@@ -34,12 +35,12 @@ export const segment = onchainTable(
 );
 
 export const subscriptionRelations = relations(subscription, ({ many }) => ({
-  segments: many(segment),
+  events: many(supportEvent),
 }));
 
-export const segmentRelations = relations(segment, ({ one }) => ({
+export const supportEventRelations = relations(supportEvent, ({ one }) => ({
   subscription: one(subscription, {
-    fields: [segment.tokenId],
+    fields: [supportEvent.tokenId],
     references: [subscription.tokenId],
   }),
 }));

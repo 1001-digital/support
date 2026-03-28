@@ -72,13 +72,6 @@ export const SupportAbi = [
   },
   {
     type: "event",
-    name: "TierBadgeUpdated",
-    inputs: [
-      { indexed: true, name: "tier", type: "uint8" },
-    ],
-  },
-  {
-    type: "event",
     name: "Withdrawal",
     inputs: [
       { indexed: true, name: "to", type: "address" },
@@ -172,13 +165,6 @@ export const SupportAbi = [
     stateMutability: "view",
     inputs: [{ name: "tier", type: "uint8" }],
     outputs: [{ name: "", type: "address[]" }],
-  },
-  {
-    type: "function",
-    name: "tierBadge",
-    stateMutability: "view",
-    inputs: [{ name: "tier", type: "uint8" }],
-    outputs: [{ name: "", type: "string" }],
   },
 
   // --- State getters ---
@@ -349,16 +335,6 @@ export const SupportAbi = [
     inputs: [
       { name: "tier", type: "uint8" },
       { name: "max", type: "uint16" },
-    ],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "setTierBadge",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "tier", type: "uint8" },
-      { name: "badge", type: "string" },
     ],
     outputs: [],
   },

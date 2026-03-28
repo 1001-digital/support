@@ -1,14 +1,10 @@
 import { ponder } from "ponder:registry";
-import { subscription, segment } from "ponder:schema";
-
-let segmentCounters: Record<string, number> = {};
+import { subscription, supportEvent } from "ponder:schema";
 
 ponder.on("Support:Transfer", async ({ event, context }) => {
   const { from, to, tokenId } = event.args;
-  const zeroAddr = "0x0000000000000000000000000000000000000000";
 
-  if (from === zeroAddr) {
-    // Mint — create subscription record
+  if (from === "0x0000000000000000000000000000000000000000") {
     await context.db
       .insert(subscription)
       .values({
@@ -20,10 +16,7 @@ ponder.on("Support:Transfer", async ({ event, context }) => {
         totalPaid: 0n,
       })
       .onConflictDoNothing();
-
-    segmentCounters[tokenId.toString()] = 0;
   } else {
-    // Transfer — update owner
     await context.db
       .update(subscription, { tokenId })
       .set({ owner: to });
@@ -31,20 +24,17 @@ ponder.on("Support:Transfer", async ({ event, context }) => {
 });
 
 ponder.on("Support:Supported", async ({ event, context }) => {
-  const { supporter, tier, tokenId, paid, expiresAt } = event.args;
-
-  const key = tokenId.toString();
-  const idx = segmentCounters[key] ?? 0;
-  segmentCounters[key] = idx + 1;
+  const { supporter, tier, tokenId, duration, paid, expiresAt } = event.args;
 
   await context.db
-    .insert(segment)
+    .insert(supportEvent)
     .values({
-      id: `${tokenId}-${idx}`,
+      id: `${event.transaction.hash}-${event.log.logIndex}`,
       tokenId,
-      index: idx,
       tier,
-      startedAt: event.block.timestamp,
+      duration,
+      paid,
+      expiresAt: BigInt(expiresAt),
       block: event.block.number,
       timestamp: event.block.timestamp,
     });
@@ -59,9 +49,9 @@ ponder.on("Support:Supported", async ({ event, context }) => {
       expiresAt: BigInt(expiresAt),
       totalPaid: paid,
     })
-    .onConflictDoUpdate(() => ({
+    .onConflictDoUpdate((row) => ({
       subscriber: supporter,
       expiresAt: BigInt(expiresAt),
-      totalPaid: paid,
+      totalPaid: row.totalPaid + paid,
     }));
 });
