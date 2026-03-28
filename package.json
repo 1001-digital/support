@@ -1,0 +1,13 @@
+{
+  "name": "@1001-digital/support-monorepo",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1"
+  }
+}
