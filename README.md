@@ -80,7 +80,7 @@ Token metadata is fully on-chain. `tokenURI` returns a `data:application/json;ba
 - **Bottom center**: `ACTIVE` or `EXPIRED`
 - **Bottom right**: duration in days
 
-The SVG uses black on white, monospace, all uppercase. The owner sets tier badge SVG content via `setTierBadge` and the logo via `setLogo`. ENS reverse resolution is attempted on-chain — falls back to short hex on chains without ENS.
+The SVG uses black on white, monospace, all uppercase. Tier badges are hardcoded in the contract source. The owner sets the logo via `setLogo`, which is rendered alongside each tier's badge. ENS reverse resolution is attempted on-chain — falls back to short hex on chains without ENS.
 
 - **Active tokens**: show the current tier's badge
 - **Expired tokens**: show the last active tier's badge
@@ -124,7 +124,6 @@ All three fields are indexed for efficient log filtering by supporter, tier, or 
 | `setTierPrice(tier, priceUSD)` | Update a tier's monthly USD price |
 | `setDiscount(minMonths, percentOff)` | Configure bulk discount (e.g. 12 months, 20% off) |
 | `setMaxSlots(tier, max)` | Limit active subscribers per tier (0 = unlimited) |
-| `setTierBadge(tier, badge)` | Set the badge SVG content for a tier |
 | `setProjectName(name)` | Update the project name |
 | `setProjectSymbol(symbol)` | Update the ERC-721 symbol |
 | `setLogo(logo)` | Update the logo SVG content |
