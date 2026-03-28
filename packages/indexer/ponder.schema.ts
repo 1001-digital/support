@@ -1,5 +1,19 @@
 import { index, onchainTable, relations } from "ponder";
 
+export const supporter = onchainTable(
+  "supporter",
+  (t) => ({
+    address: t.hex().primaryKey(),
+    tier: t.integer().notNull(),
+    tokenId: t.bigint().notNull(),
+    expiresAt: t.bigint().notNull(),
+    totalPaid: t.bigint().notNull(),
+  }),
+  (table) => ({
+    tierIdx: index().on(table.tier),
+  }),
+);
+
 export const subscription = onchainTable(
   "subscription",
   (t) => ({
@@ -33,6 +47,10 @@ export const supportEvent = onchainTable(
     tierIdx: index().on(table.tier),
   }),
 );
+
+export const supporterRelations = relations(supporter, ({ many }) => ({
+  subscriptions: many(subscription),
+}));
 
 export const subscriptionRelations = relations(subscription, ({ many }) => ({
   events: many(supportEvent),

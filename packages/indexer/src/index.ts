@@ -1,5 +1,5 @@
 import { ponder } from "ponder:registry";
-import { subscription, supportEvent } from "ponder:schema";
+import { supporter, subscription, supportEvent } from "ponder:schema";
 
 ponder.on("Support:Transfer", async ({ event, context }) => {
   const { from, to, tokenId } = event.args;
@@ -24,7 +24,7 @@ ponder.on("Support:Transfer", async ({ event, context }) => {
 });
 
 ponder.on("Support:Supported", async ({ event, context }) => {
-  const { supporter, tier, tokenId, duration, paid, expiresAt } = event.args;
+  const { supporter: address, tier, tokenId, duration, paid, expiresAt } = event.args;
 
   await context.db
     .insert(supportEvent)
@@ -43,14 +43,31 @@ ponder.on("Support:Supported", async ({ event, context }) => {
     .insert(subscription)
     .values({
       tokenId,
-      owner: supporter,
-      subscriber: supporter,
+      owner: address,
+      subscriber: address,
       startedAt: event.block.timestamp,
       expiresAt: BigInt(expiresAt),
       totalPaid: paid,
     })
     .onConflictDoUpdate((row) => ({
-      subscriber: supporter,
+      subscriber: address,
+      expiresAt: BigInt(expiresAt),
+      totalPaid: row.totalPaid + paid,
+    }));
+
+  // Mark address as supporter with current tier
+  await context.db
+    .insert(supporter)
+    .values({
+      address,
+      tier,
+      tokenId,
+      expiresAt: BigInt(expiresAt),
+      totalPaid: paid,
+    })
+    .onConflictDoUpdate((row) => ({
+      tier,
+      tokenId,
       expiresAt: BigInt(expiresAt),
       totalPaid: row.totalPaid + paid,
     }));
