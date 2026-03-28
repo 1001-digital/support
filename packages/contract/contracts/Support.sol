@@ -119,6 +119,7 @@ contract Support {
         uint16 _discountMinMonths,
         uint16 _discountPercentOff
     ) {
+        if (_discountPercentOff > 100) revert InvalidDiscount();
         owner = msg.sender;
         projectName = _projectName;
         projectSymbol = _projectSymbol;
@@ -507,7 +508,12 @@ contract Support {
         } else {
             paths = ''; // TODO: tier 3 badge paths
         }
-        return ; // TODO: including logo 
+        return string.concat(
+            '<g transform="translate(200,200)">',
+            '<g transform="translate(-20,-20) scale(0.8)">', logo, '</g>',
+            paths,
+            '</g>'
+        );
     }
 
     function _attributes(uint256 tokenId, uint8 displayTier, bool active) internal view returns (string memory) {
