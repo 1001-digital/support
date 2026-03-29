@@ -48,10 +48,6 @@ export const supportEvent = onchainTable(
   }),
 );
 
-export const supporterRelations = relations(supporter, ({ many }) => ({
-  subscriptions: many(subscription),
-}));
-
 export const subscriptionRelations = relations(subscription, ({ many }) => ({
   events: many(supportEvent),
 }));
