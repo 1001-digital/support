@@ -367,10 +367,12 @@ contract Support {
         address recipient, uint8 tier, uint32 duration, bool free
     ) internal returns (uint256 required) {
         if (tier >= 4) revert InvalidTier();
-        if (duration == 0) revert InvalidDuration();
 
         uint256 tokenId = activeToken[recipient];
         bool isNew = tokenId == 0 || block.timestamp >= expiresAt[tokenId];
+
+        // New subscriptions require duration >= 1. Active tier changes allow 0.
+        if (duration == 0 && (isNew || tier == _lastTier(tokenId))) revert InvalidDuration();
         uint64 newExpiry;
 
         if (isNew) {

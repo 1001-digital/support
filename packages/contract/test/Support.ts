@@ -141,6 +141,56 @@ describe("Support", async function () {
     assert.equal(segs[1].tier, 2);
   });
 
+  it("Should upgrade with duration 0 (just pay diff)", async function () {
+    const { support } = await deploy();
+
+    await support.write.support([walletClient.account.address, 0, 2], { value: await support.read.cost([0, 2]) });
+    const expiryBefore = await support.read.expiresAt([1n]);
+
+    // Upgrade to tier 2 with duration 0 — only pay the diff, expiry unchanged
+    await support.write.support([walletClient.account.address, 2, 0], { value: parseEther("1") });
+
+    const expiryAfter = await support.read.expiresAt([1n]);
+    assert.equal(expiryAfter, expiryBefore); // no extension
+
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 2);
+  });
+
+  it("Should downgrade with duration 0 (just convert time)", async function () {
+    const { support } = await deploy();
+
+    await support.write.support([walletClient.account.address, 2, 1], { value: await support.read.cost([2, 1]) });
+    const expiryBefore = await support.read.expiresAt([1n]);
+
+    // Downgrade to tier 0 with duration 0 — free, remaining time converts
+    await support.write.support([walletClient.account.address, 0, 0], { value: 0n });
+
+    const expiryAfter = await support.read.expiresAt([1n]);
+    assert.ok(expiryAfter > expiryBefore); // converted time is longer
+
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 0);
+  });
+
+  it("Should revert duration 0 for new subscription", async function () {
+    const { support } = await deploy();
+    await assert.rejects(
+      support.write.support([walletClient.account.address, 0, 0], { value: 0n }),
+      /InvalidDuration/,
+    );
+  });
+
+  it("Should revert duration 0 for same-tier extension", async function () {
+    const { support } = await deploy();
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+
+    await assert.rejects(
+      support.write.support([walletClient.account.address, 0, 0], { value: 0n }),
+      /InvalidDuration/,
+    );
+  });
+
   // --- Downgrade ---
 
   it("Should downgrade immediately and extend duration", async function () {
