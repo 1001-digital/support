@@ -36,6 +36,7 @@ contract Support {
     error NotTokenOwner();
     error NotApproved();
     error UnsafeRecipient();
+    error UnsafeString();
 
     // --- Types ---
 
@@ -64,6 +65,7 @@ contract Support {
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
     event MetadataUpdate(uint256 tokenId);
+    event PriceFeedUpdated(address priceFeed);
     event ProjectNameUpdated(string name);
     event ProjectSymbolUpdated(string symbol);
     event LogoUpdated();
@@ -71,7 +73,7 @@ contract Support {
     // --- State ---
 
     address public owner;
-    AggregatorV3Interface public immutable priceFeed;
+    AggregatorV3Interface public priceFeed;
 
     // Project metadata
     string public projectName;
@@ -121,6 +123,7 @@ contract Support {
     ) {
         if (_discountPercentOff > 100) revert InvalidDiscount();
         owner = msg.sender;
+        emit OwnershipTransferred(address(0), msg.sender);
         projectName = _projectName;
         projectSymbol = _projectSymbol;
         logo = _logo;
@@ -187,6 +190,13 @@ contract Support {
 
     // --- Owner ---
 
+    /// @notice Update the Chainlink price feed address.
+    function setPriceFeed(address _priceFeed) external onlyOwner {
+        if (_priceFeed == address(0)) revert InvalidOwner();
+        priceFeed = AggregatorV3Interface(_priceFeed);
+        emit PriceFeedUpdated(_priceFeed);
+    }
+
     /// @notice Update a tier's monthly USD price.
     function setTierPrice(uint8 tier, uint128 priceUSD) external onlyOwner {
         if (tier >= 4) revert InvalidTier();
@@ -211,12 +221,14 @@ contract Support {
 
     /// @notice Update the project name.
     function setProjectName(string calldata _name) external onlyOwner {
+        _requireSafeString(_name);
         projectName = _name;
         emit ProjectNameUpdated(_name);
     }
 
     /// @notice Update the project symbol.
     function setProjectSymbol(string calldata _symbol) external onlyOwner {
+        _requireSafeString(_symbol);
         projectSymbol = _symbol;
         emit ProjectSymbolUpdated(_symbol);
     }
@@ -377,13 +389,13 @@ contract Support {
 
         if (isNew) {
             if (!free) required = _baseCost(tier, duration);
-            newExpiry = uint64(block.timestamp) + uint64(duration) * 30 days;
+            newExpiry = _addDuration(uint64(block.timestamp), duration);
         } else {
             uint8 activeTier = _lastTier(tokenId);
 
             if (tier == activeTier) {
                 if (!free) required = _baseCost(tier, duration);
-                newExpiry = expiresAt[tokenId] + uint64(duration) * 30 days;
+                newExpiry = _addDuration(expiresAt[tokenId], duration);
             } else {
                 uint64 remaining = expiresAt[tokenId] - uint64(block.timestamp);
                 uint128 oldPrice = tierPrices[activeTier];
@@ -394,13 +406,14 @@ contract Support {
                         uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
                         required = _usdToEth(diffUSD + _discountedUSD(tier, duration));
                     }
-                    newExpiry = expiresAt[tokenId] + uint64(duration) * 30 days;
+                    newExpiry = _addDuration(expiresAt[tokenId], duration);
                 } else {
                     if (!free) required = _baseCost(tier, duration);
-                    uint64 converted = newPrice == 0
-                        ? remaining
-                        : uint64(uint256(remaining) * oldPrice / newPrice);
-                    newExpiry = uint64(block.timestamp) + converted + uint64(duration) * 30 days;
+                    uint256 rawConverted = newPrice == 0
+                        ? uint256(remaining)
+                        : uint256(remaining) * oldPrice / newPrice;
+                    uint256 rawExpiry = uint256(block.timestamp) + rawConverted + uint256(duration) * 30 days;
+                    newExpiry = rawExpiry > type(uint64).max ? type(uint64).max : uint64(rawExpiry);
                 }
             }
         }
@@ -460,6 +473,12 @@ contract Support {
         }
 
         revert TierFull();
+    }
+
+    /// @dev Safely add duration months to a base timestamp, capping at uint64 max.
+    function _addDuration(uint64 base, uint32 duration) internal pure returns (uint64) {
+        uint256 result = uint256(base) + uint256(duration) * 30 days;
+        return result > type(uint64).max ? type(uint64).max : uint64(result);
     }
 
     // --- Token helpers ---
@@ -567,6 +586,17 @@ contract Support {
         if (answeredInRound < roundId) revert StalePrice();
         if (block.timestamp - updatedAt > 1 hours) revert StalePrice();
         return usdAmount * 1e18 / uint256(price);
+    }
+
+    // --- Validation ---
+
+    /// @dev Reject strings containing characters that break JSON or SVG embedding.
+    function _requireSafeString(string calldata s) internal pure {
+        bytes calldata b = bytes(s);
+        for (uint256 i; i < b.length; ++i) {
+            bytes1 c = b[i];
+            if (c == '"' || c == '<' || c == '>' || c == '\\') revert UnsafeString();
+        }
     }
 
     // --- Utilities ---
