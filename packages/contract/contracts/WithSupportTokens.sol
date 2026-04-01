@@ -2,12 +2,13 @@
 pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {Support} from "./Support.sol";
 import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 
 /// @title WithSupportTokens
 /// @notice Extension that represents support subscriptions as ERC-721 tokens.
-abstract contract WithSupportTokens is Support, ERC721 {
+abstract contract WithSupportTokens is Support, ERC721Enumerable {
 
     // --- Events ---
 
@@ -61,7 +62,11 @@ abstract contract WithSupportTokens is Support, ERC721 {
         return renderer.tokenURI(data);
     }
 
-    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
+    function totalSupply() public view override(Support, ERC721Enumerable) returns (uint256) {
+        return super.totalSupply();
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override(ERC721Enumerable) returns (bool) {
         return interfaceId == 0x49064906 // ERC-4906
             || super.supportsInterface(interfaceId);
     }
@@ -71,7 +76,18 @@ abstract contract WithSupportTokens is Support, ERC721 {
 
         // Subscription bookkeeping on transfer (not on mint)
         if (from != address(0) && to != address(0)) {
-            if (activeToken[from] == tokenId) activeToken[from] = 0;
+            if (activeToken[from] == tokenId) {
+                uint256 replacement = 0;
+                uint256 balance = balanceOf(from);
+                for (uint256 i = 0; i < balance; i++) {
+                    uint256 candidate = tokenOfOwnerByIndex(from, i);
+                    if (block.timestamp < expiresAt[candidate]) {
+                        replacement = candidate;
+                        break;
+                    }
+                }
+                activeToken[from] = replacement;
+            }
 
             if (block.timestamp < expiresAt[tokenId]) {
                 uint256 existing = activeToken[to];

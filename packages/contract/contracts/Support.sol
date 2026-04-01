@@ -66,7 +66,11 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     uint16[4] public maxSlots;
 
     // Subscription counter
-    uint256 public totalSupply;
+    uint256 internal _tokenIdCounter;
+
+    function totalSupply() public view virtual returns (uint256) {
+        return _tokenIdCounter;
+    }
 
     // Subscriptions
     mapping(address => uint256) public activeToken;
@@ -308,7 +312,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         address recipient, uint256 tokenId, bool isNew, uint8 tier, uint64 newExpiry
     ) internal returns (uint256) {
         if (isNew) {
-            tokenId = ++totalSupply;
+            tokenId = ++_tokenIdCounter;
             _onNewSubscription(recipient, tokenId);
             activeToken[recipient] = tokenId;
             subscriberOf[tokenId] = recipient;

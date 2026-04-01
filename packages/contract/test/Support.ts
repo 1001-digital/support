@@ -486,6 +486,37 @@ describe("Support", async function () {
     assert.equal(await support.read.ownerOf([1n]), getAddress(otherWallet.account.address));
   });
 
+  it("Should promote another active token when activeToken is transferred", async function () {
+    const { support } = await deploy();
+
+    // Alice subscribes (token 1)
+    await support.write.support([walletClient.account.address, 0, 3], { value: await support.read.cost([0, 3]) });
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
+
+    // Bob subscribes (token 2) and transfers it to Alice
+    await support.write.support([otherWallet.account.address, 1, 3], {
+      value: await support.read.cost([1, 3]),
+      account: otherWallet.account,
+    });
+    await support.write.transferFrom(
+      [otherWallet.account.address, walletClient.account.address, 2n],
+      { account: otherWallet.account },
+    );
+
+    // Alice owns tokens 1 and 2, activeToken is still 1
+    assert.equal(await support.read.balanceOf([walletClient.account.address]), 2n);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
+
+    // Alice transfers token 1 away — activeToken should fall back to token 2, not 0
+    await support.write.transferFrom([walletClient.account.address, otherWallet.account.address, 1n]);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 2n);
+
+    // Next support() call should extend token 2, not create token 3
+    await support.write.support([walletClient.account.address, 1, 1], { value: await support.read.cost([1, 1]) });
+    assert.equal(await support.read.totalSupply(), 2n);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 2n);
+  });
+
   it("Should revert unauthorized transfer", async function () {
     const { support } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
