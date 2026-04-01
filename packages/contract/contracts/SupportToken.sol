@@ -11,11 +11,11 @@ contract SupportToken is WithSupportTokens {
     constructor(
         string memory _projectName,
         string memory _projectSymbol,
-        string memory _logo,
         address _priceFeed,
         uint128[4] memory _tierPrices,
-        address _renderer,
-        uint256 _saleStart
+        uint256 _saleStart,
+        string memory _logo,
+        address _renderer
     ) Support(_projectName, _projectSymbol, _priceFeed, _tierPrices, _saleStart)
       WithSupportTokens(_logo, _renderer)
     {}

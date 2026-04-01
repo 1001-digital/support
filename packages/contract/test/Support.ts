@@ -28,11 +28,11 @@ describe("Support", async function () {
     const support = await viem.deployContract("SupportToken", [
       "TestProject",
       "TEST",
-      '<path d="M0 0"/>',
       priceFeed.address,
       tierPrices,
-      renderer.address,
       0n,
+      '<path d="M0 0"/>',
+      renderer.address,
     ]);
 
     const discountHook = await viem.deployContract("DiscountHook", [discountMinMonths, discountPercentOff]);
@@ -1127,8 +1127,8 @@ describe("Support", async function () {
     const block = await publicClient.getBlock();
     const futureSaleStart = block.timestamp + 86400n; // 1 day from chain time
     const support = await viem.deployContract("SupportToken", [
-      "TestProject", "TEST", '<path d="M0 0"/>', priceFeed.address,
-      tierPrices, renderer.address, futureSaleStart,
+      "TestProject", "TEST", priceFeed.address,
+      tierPrices, futureSaleStart, '<path d="M0 0"/>', renderer.address,
     ]);
 
     const discountHook = await viem.deployContract("DiscountHook", [discountMinMonths, discountPercentOff]);

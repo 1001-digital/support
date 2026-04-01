@@ -13,11 +13,11 @@ export default buildModule("SupportModule", (m) => {
   const support = m.contract("SupportToken", [
     projectName,
     projectSymbol,
-    logo,
     priceFeed,
     tierPrices,
-    renderer,
     saleStart,
+    logo,
+    renderer,
   ]);
 
   return { support, renderer };
