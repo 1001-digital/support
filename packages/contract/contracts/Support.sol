@@ -35,7 +35,6 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
     error NothingToWithdraw();
     error TierFull();
     error TierChangeForbidden();
-    error UnsafeString();
 
     // --- Events ---
 
@@ -256,14 +255,12 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
 
     /// @notice Update the project name.
     function setProjectName(string calldata _name) external onlyOwner {
-        _requireSafeString(_name);
         projectName = _name;
         emit ProjectNameUpdated(_name);
     }
 
     /// @notice Update the project symbol.
     function setProjectSymbol(string calldata _symbol) external onlyOwner {
-        _requireSafeString(_symbol);
         projectSymbol = _symbol;
         emit ProjectSymbolUpdated(_symbol);
     }
@@ -422,17 +419,6 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         uint256 usd = _discountedUSD(tier, duration);
         if (usd == 0) return 0;
         return _usdToEth(usd);
-    }
-
-    // --- Validation ---
-
-    /// @dev Reject strings containing characters that break JSON or SVG embedding.
-    function _requireSafeString(string calldata s) internal pure {
-        bytes calldata b = bytes(s);
-        for (uint256 i; i < b.length; ++i) {
-            bytes1 c = b[i];
-            if (c == '"' || c == '<' || c == '>' || c == '\\') revert UnsafeString();
-        }
     }
 
 

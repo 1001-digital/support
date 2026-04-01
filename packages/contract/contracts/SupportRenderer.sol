@@ -3,16 +3,18 @@ pragma solidity ^0.8.28;
 
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
+import {LibString} from "solady/src/utils/LibString.sol";
 import {WithENSReverseLookup} from "@1001-digital/erc721-extensions/contracts/WithENSReverseLookup.sol";
 import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 
 contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
 
     function tokenURI(TokenData calldata data) external view returns (string memory) {
-        string memory svg = _buildSVG(data);
+        string memory safeName = LibString.escapeHTML(data.projectName);
+        string memory svg = _buildSVG(data, safeName);
 
         string memory json = string.concat(
-            '{"name":"', data.projectName, ' #', Strings.toString(data.tokenId),
+            '{"name":"', LibString.escapeJSON(data.projectName, false), ' #', Strings.toString(data.tokenId),
             '","image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)),
             '","attributes":[', _attributes(data), ']}'
         );
@@ -22,7 +24,7 @@ contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
 
     // --- SVG ---
 
-    function _buildSVG(TokenData calldata data) internal view returns (string memory) {
+    function _buildSVG(TokenData calldata data, string memory safeName) internal view returns (string memory) {
         uint256 dayNum = (block.timestamp - data.startedAt) / 1 days + 1;
         uint256 dur = data.active
             ? (block.timestamp - data.startedAt) / 1 days
@@ -32,7 +34,7 @@ contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
             '<rect width="400" height="400" fill="white"/>'
             '<style>.l{font-family:monospace;fill:#666;text-transform:uppercase;font-size:10px;font-weight:500}</style>'
-            '<text class="l" x="20" y="30">', data.projectName, ' SUPPORTERS</text>'
+            '<text class="l" x="20" y="30">', safeName, ' SUPPORTERS</text>'
             '<text class="l" x="380" y="30" text-anchor="end">', _displayName(data.subscriber), '</text>',
             _badge(data.displayTier, data.logo),
             '<text class="l" x="20" y="380">DAY ', Strings.toString(dayNum), '</text>'

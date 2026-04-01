@@ -35,6 +35,9 @@ importers:
       hardhat:
         specifier: ^3.1.7
         version: 3.2.0
+      solady:
+        specifier: ^0.1.26
+        version: 0.1.26
       typescript:
         specifier: ~5.8.3
         version: 5.8.3
@@ -2156,6 +2159,9 @@ packages:
   slash@3.0.0:
     resolution: {integrity: sha512-g9Q1haeby36OSStwb4ntCGGGaKsaVSjQ68fBxoQcutl5fS1vuY18H3wSt3jFyFtrkx+Kz0V1G85A4MyAdDMi2Q==}
     engines: {node: '>=8'}
+
+  solady@0.1.26:
+    resolution: {integrity: sha512-dhGr/ptJFdea/1KE6xgqgwEdbMhUiSfRc6A+jLeltPe16zyt9qtED3PElIBVRnzEmUO5aZTjKVAr6SlqXBBcIw==}
 
   sonic-boom@3.8.1:
     resolution: {integrity: sha512-y4Z8LCDBuum+PBP3lSV7RHrXscqksve/bi0as7mhwVnBW+/wUqKT/2Kb7um8yqcFy0duYbbPxzt89Zy2nOCaxg==}
@@ -4544,6 +4550,8 @@ snapshots:
   sisteransi@1.0.5: {}
 
   slash@3.0.0: {}
+
+  solady@0.1.26: {}
 
   sonic-boom@3.8.1:
     dependencies:
