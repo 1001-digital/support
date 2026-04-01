@@ -5,7 +5,7 @@ import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {Support} from "../Support.sol";
 import {ISupportRenderer, Segment} from "../interfaces/ISupportRenderer.sol";
-import {IGuardHook} from "../interfaces/IGuardHook.sol";
+import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 /// @title WithSupportTokens
 /// @notice Extension that represents support subscriptions as ERC-721 tokens.
@@ -85,13 +85,13 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
         _receiveActiveToken(to, tokenId);
 
         if (wasActive) {
-            IGuardHook g = guard;
-            if (address(g) != address(0)) {
+            ISubscriptionHook h = hook;
+            if (address(h) != address(0)) {
                 if (!_hasActiveTierToken(from, tier)) {
-                    g.onRelease(tier, from);
+                    h.onRelease(tier, from);
                 }
                 if (_hasActiveTierToken(to, tier)) {
-                    g.onSubscribe(tier, to);
+                    h.onSubscribe(tier, to);
                 }
             }
         }

@@ -2,16 +2,16 @@
 pragma solidity ^0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IGuardHook} from "../interfaces/IGuardHook.sol";
+import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 interface ISupportRead {
     function activeTokenOf(address supporter) external view returns (uint256);
     function currentTier(uint256 tokenId) external view returns (uint8 tier, bool active);
 }
 
-/// @title MaxSlotsGuard
+/// @title MaxSlotsHook
 /// @notice Enforces a maximum number of active subscribers per tier.
-contract MaxSlotsGuard is IGuardHook, Ownable {
+contract MaxSlotsHook is ISubscriptionHook, Ownable {
 
     error TierFull();
     error InvalidTier();
@@ -34,19 +34,19 @@ contract MaxSlotsGuard is IGuardHook, Ownable {
         support = _support;
     }
 
-    // --- IGuardHook ---
+    // --- ISubscriptionHook ---
+
+    function beforeSubscribe(
+        uint8 tier, uint32 duration, uint256 baseUSD, address subscriber, bool, uint8
+    ) external view override returns (Adjustments memory adj) {
+        adj.adjustedUSD = baseUSD;
+        adj.adjustedDuration = duration;
+        adj.adjustedStart = 0;
+        adj.allowed = _canSubscribe(tier, subscriber);
+    }
 
     function canSubscribe(uint8 tier, address subscriber) external view override returns (bool) {
-        uint16 max = maxSlots[tier];
-        if (max == 0) return true;
-        if (_tierHolderIndex[tier][subscriber] != 0) return true;
-        if (_tierHolders[tier].length < max) return true;
-
-        address[] storage holders = _tierHolders[tier];
-        for (uint256 i; i < holders.length; ++i) {
-            if (!_isActiveOnTier(holders[i], tier)) return true;
-        }
-        return false;
+        return _canSubscribe(tier, subscriber);
     }
 
     function onSubscribe(uint8 tier, address subscriber) external override onlySupport {
@@ -121,6 +121,19 @@ contract MaxSlotsGuard is IGuardHook, Ownable {
     }
 
     // --- Internal ---
+
+    function _canSubscribe(uint8 tier, address subscriber) internal view returns (bool) {
+        uint16 max = maxSlots[tier];
+        if (max == 0) return true;
+        if (_tierHolderIndex[tier][subscriber] != 0) return true;
+        if (_tierHolders[tier].length < max) return true;
+
+        address[] storage holders = _tierHolders[tier];
+        for (uint256 i; i < holders.length; ++i) {
+            if (!_isActiveOnTier(holders[i], tier)) return true;
+        }
+        return false;
+    }
 
     function _isActiveOnTier(address holder, uint8 tier) internal view returns (bool) {
         uint256 tokenId = ISupportRead(support).activeTokenOf(holder);

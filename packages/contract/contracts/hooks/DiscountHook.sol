@@ -2,11 +2,11 @@
 pragma solidity ^0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IPricingHook} from "../interfaces/IPricingHook.sol";
+import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
-/// @title DiscountPricingHook
+/// @title DiscountHook
 /// @notice Applies a percentage discount when duration meets a minimum threshold.
-contract DiscountPricingHook is IPricingHook, Ownable {
+contract DiscountHook is ISubscriptionHook, Ownable {
 
     error InvalidDiscount();
 
@@ -21,14 +21,25 @@ contract DiscountPricingHook is IPricingHook, Ownable {
         percentOff = _percentOff;
     }
 
-    function adjustCost(uint8, uint32 duration, uint256 baseUSD, address)
-        external view override returns (uint256)
-    {
+    function beforeSubscribe(
+        uint8, uint32 duration, uint256 baseUSD, address, bool, uint8
+    ) external view override returns (Adjustments memory adj) {
+        adj.adjustedDuration = duration;
+        adj.adjustedStart = 0;
+        adj.allowed = true;
         if (duration >= minMonths && minMonths > 0) {
-            return baseUSD * (100 - percentOff) / 100;
+            adj.adjustedUSD = baseUSD * (100 - percentOff) / 100;
+        } else {
+            adj.adjustedUSD = baseUSD;
         }
-        return baseUSD;
     }
+
+    function canSubscribe(uint8, address) external pure override returns (bool) {
+        return true;
+    }
+
+    function onSubscribe(uint8, address) external override {}
+    function onRelease(uint8, address) external override {}
 
     function setDiscount(uint16 _minMonths, uint16 _percentOff) external onlyOwner {
         if (_percentOff > 100) revert InvalidDiscount();
