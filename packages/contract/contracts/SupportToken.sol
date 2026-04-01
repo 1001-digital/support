@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {WithSupportTokens} from "./WithSupportTokens.sol";
+import {WithSupportTokens} from "./extensions/WithSupportTokens.sol";
 import {Support} from "./Support.sol";
 
 /// @title SupportToken
