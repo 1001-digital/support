@@ -257,11 +257,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint256 tokenId = activeToken[recipient];
         bool isNew = tokenId == 0 || block.timestamp >= expiresAt[tokenId];
 
-        // New subscriptions require duration >= 1. Active tier changes allow 0.
-        if (duration == 0 && (isNew || tier == _lastTier(tokenId))) revert InvalidDuration();
-
-        // Capture previous tier before _applySubscription modifies segments
         uint8 previousTier = tokenId != 0 ? _lastTier(tokenId) : type(uint8).max;
+
+        // New subscriptions require duration >= 1. Active tier changes allow 0.
+        if (duration == 0 && (isNew || tier == previousTier)) revert InvalidDuration();
         uint64 newExpiry;
 
         if (isNew) {
@@ -271,7 +270,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
             if (!free) required = _baseCost(tier, duration);
             newExpiry = _addDuration(expiresAt[tokenId], duration);
         } else {
-            (required, newExpiry) = _changeTier(tokenId, previousTier, tier, duration, free);
+            (required, newExpiry) = _changeTier(expiresAt[tokenId], previousTier, tier, duration, free);
         }
 
         tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry);
@@ -286,23 +285,21 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     function _changeTier(
-        uint256 tokenId, uint8 fromTier, uint8 toTier, uint32 duration, bool free
+        uint64 currentExpiry, uint8 fromTier, uint8 toTier, uint32 duration, bool free
     ) private view returns (uint256 required, uint64 newExpiry) {
-        uint64 remaining = expiresAt[tokenId] - uint64(block.timestamp);
+        uint64 remaining = currentExpiry - uint64(block.timestamp);
         uint128 oldPrice = tierPrices[fromTier];
         uint128 newPrice = tierPrices[toTier];
 
-        // Upgrade: charge the price difference for remaining time + new duration
         if (newPrice > oldPrice) {
             if (!free) {
                 uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
                 required = _usdToEth(diffUSD + _discountedUSD(toTier, duration));
             }
-            newExpiry = _addDuration(expiresAt[tokenId], duration);
+            newExpiry = _addDuration(currentExpiry, duration);
             return (required, newExpiry);
         }
 
-        // Downgrade: convert remaining time at the price ratio + add new duration
         if (!free) required = _baseCost(toTier, duration);
         uint256 converted = newPrice == 0
             ? uint256(remaining)
