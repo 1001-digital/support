@@ -37,7 +37,7 @@ async function main() {
 
   const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
   const renderer = await viem.deployContract('SupportRenderer', [])
-  const support = await viem.deployContract('Support', [
+  const support = await viem.deployContract('SupportToken', [
     'EVM.NOW',
     'EVMNOW',
     logo,

@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {HasPriceFeed, AggregatorV3Interface} from "@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol";
 import {WithSaleStart} from "@1001-digital/erc721-extensions/contracts/WithSaleStart.sol";
-import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
+import {Segment} from "./ISupportRenderer.sol";
 
 /**
 *        ·       ·   ·     ·
@@ -22,7 +21,7 @@ import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 *  @author ygg
 *  @notice A tiered support system on the world computer.
 */
-contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
+abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Errors ---
 
@@ -51,20 +50,14 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
     event DiscountUpdated(uint16 minMonths, uint16 percentOff);
     event MaxSlotsUpdated(uint8 indexed tier, uint16 maxSlots);
     event Withdrawal(address indexed to, uint256 amount);
-    event MetadataUpdate(uint256 tokenId);
     event ProjectNameUpdated(string name);
     event ProjectSymbolUpdated(string symbol);
-    event LogoUpdated();
-    event RendererUpdated(address renderer);
 
     // --- State ---
-
-    ISupportRenderer public renderer;
 
     // Project metadata
     string public projectName;
     string public projectSymbol;
-    string public logo;
 
     // Pricing
     uint128[4] public tierPrices;
@@ -72,7 +65,7 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
     uint16 public discountPercentOff;
     uint16[4] public maxSlots;
 
-    // Token counter
+    // Subscription counter
     uint256 public totalSupply;
 
     // Subscriptions
@@ -90,77 +83,21 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
     constructor(
         string memory _projectName,
         string memory _projectSymbol,
-        string memory _logo,
         address _priceFeed,
         uint128[4] memory _tierPrices,
         uint16 _discountMinMonths,
         uint16 _discountPercentOff,
-        address _renderer,
         uint256 _saleStart
-    ) ERC721("", "") Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
+    ) Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
         if (_discountPercentOff > 100) revert InvalidDiscount();
         projectName = _projectName;
         projectSymbol = _projectSymbol;
-        logo = _logo;
         tierPrices = _tierPrices;
         discountMinMonths = _discountMinMonths;
         discountPercentOff = _discountPercentOff;
-        renderer = ISupportRenderer(_renderer);
     }
 
-    // --- ERC-721 Overrides ---
-
-    function name() public view override returns (string memory) {
-        return projectName;
-    }
-
-    function symbol() public view override returns (string memory) {
-        return projectSymbol;
-    }
-
-    function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        _requireOwned(tokenId);
-
-        (uint8 tier, bool active) = _currentTier(tokenId);
-        uint8 displayTier = active ? tier : _lastTier(tokenId);
-
-        ISupportRenderer.TokenData memory data = ISupportRenderer.TokenData({
-            tokenId: tokenId,
-            subscriber: subscriberOf[tokenId],
-            projectName: projectName,
-            logo: logo,
-            startedAt: startedAt[tokenId],
-            expiresAt: expiresAt[tokenId],
-            displayTier: displayTier,
-            active: active,
-            segments: _segments[tokenId]
-        });
-
-        return renderer.tokenURI(data);
-    }
-
-    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
-        return interfaceId == 0x49064906 // ERC-4906
-            || super.supportsInterface(interfaceId);
-    }
-
-    function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
-        address from = super._update(to, tokenId, auth);
-
-        // Subscription bookkeeping on transfer (not on mint)
-        if (from != address(0) && to != address(0)) {
-            if (activeToken[from] == tokenId) activeToken[from] = 0;
-
-            if (block.timestamp < expiresAt[tokenId]) {
-                uint256 existing = activeToken[to];
-                if (existing == 0 || block.timestamp >= expiresAt[existing]) {
-                    activeToken[to] = tokenId;
-                }
-            }
-        }
-
-        return from;
-    }
+    // --- Ownership Overrides ---
 
     function transferOwnership(address newOwner) public override(Ownable2Step, Ownable) onlyOwner {
         Ownable2Step.transferOwnership(newOwner);
@@ -265,18 +202,6 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         emit ProjectSymbolUpdated(_symbol);
     }
 
-    /// @notice Update the logo SVG content.
-    function setLogo(string calldata _logo) external onlyOwner {
-        logo = _logo;
-        emit LogoUpdated();
-    }
-
-    /// @notice Update the renderer contract.
-    function setRenderer(address _renderer) external onlyOwner {
-        renderer = ISupportRenderer(_renderer);
-        emit RendererUpdated(_renderer);
-    }
-
     /// @notice Withdraw all collected ETH.
     function withdraw() external onlyOwner {
         uint256 balance = address(this).balance;
@@ -285,6 +210,14 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         if (!sent) revert TransferFailed();
         emit Withdrawal(owner(), balance);
     }
+
+    // --- Hooks ---
+
+    /// @dev Called when a new subscription is created. Override to add side effects (e.g. minting an NFT).
+    function _onNewSubscription(address recipient, uint256 tokenId) internal virtual {}
+
+    /// @dev Called after any subscription change. Override to add side effects (e.g. metadata update events).
+    function _afterSubscriptionChange(uint256 tokenId) internal virtual {}
 
     // --- Subscription ---
 
@@ -334,7 +267,7 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry);
         _claimTierSlot(tier, recipient);
 
-        emit MetadataUpdate(tokenId);
+        _afterSubscriptionChange(tokenId);
         emit Supported(recipient, tier, tokenId, duration, required, newExpiry);
     }
 
@@ -343,8 +276,9 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
     ) internal returns (uint256) {
         if (isNew) {
             tokenId = ++totalSupply;
-            _mint(recipient, tokenId);
+            _onNewSubscription(recipient, tokenId);
             activeToken[recipient] = tokenId;
+            subscriberOf[tokenId] = recipient;
             startedAt[tokenId] = uint64(block.timestamp);
             _segments[tokenId].push(Segment(tier, uint64(block.timestamp)));
         } else if (tier != _lastTier(tokenId)) {
@@ -352,7 +286,6 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         }
 
         expiresAt[tokenId] = newExpiry;
-        subscriberOf[tokenId] = recipient;
         return tokenId;
     }
 
@@ -392,7 +325,7 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         return result > type(uint64).max ? type(uint64).max : uint64(result);
     }
 
-    // --- Token helpers ---
+    // --- Subscription helpers ---
 
     function _currentTier(uint256 tokenId) internal view returns (uint8, bool) {
         uint64 end = expiresAt[tokenId];
@@ -420,6 +353,5 @@ contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
         if (usd == 0) return 0;
         return _usdToEth(usd);
     }
-
 
 }

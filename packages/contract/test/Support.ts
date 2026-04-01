@@ -24,7 +24,7 @@ describe("Support", async function () {
   async function deploy() {
     const priceFeed = await viem.deployContract("MockPriceFeed", [ETH_USD]);
     const renderer = await viem.deployContract("SupportRenderer", []);
-    const support = await viem.deployContract("Support", [
+    const support = await viem.deployContract("SupportToken", [
       "TestProject",
       "TEST",
       '<path d="M0 0"/>',
@@ -761,7 +761,7 @@ describe("Support", async function () {
     const renderer = await viem.deployContract("SupportRenderer", []);
     const block = await publicClient.getBlock();
     const futureSaleStart = block.timestamp + 86400n; // 1 day from chain time
-    const support = await viem.deployContract("Support", [
+    const support = await viem.deployContract("SupportToken", [
       "TestProject", "TEST", '<path d="M0 0"/>', priceFeed.address,
       tierPrices, discountMinMonths, discountPercentOff, renderer.address, futureSaleStart,
     ]);

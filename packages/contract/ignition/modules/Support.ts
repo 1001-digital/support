@@ -12,7 +12,7 @@ export default buildModule("SupportModule", (m) => {
 
   const renderer = m.contract("SupportRenderer", []);
 
-  const support = m.contract("Support", [
+  const support = m.contract("SupportToken", [
     projectName,
     projectSymbol,
     logo,
