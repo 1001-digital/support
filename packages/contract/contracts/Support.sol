@@ -5,6 +5,8 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 import {HasPriceFeed, AggregatorV3Interface} from "@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol";
 import {WithSaleStart} from "@1001-digital/erc721-extensions/contracts/WithSaleStart.sol";
 import {Segment} from "./ISupportRenderer.sol";
+import {IPricingHook} from "./IPricingHook.sol";
+import {IGuardHook} from "./IGuardHook.sol";
 
 /**
 *        ·       ·   ·     ·
@@ -28,11 +30,9 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     error InvalidTier();
     error InvalidDuration();
     error InvalidRecipient();
-    error InvalidDiscount();
     error InsufficientPayment();
     error TransferFailed();
     error NothingToWithdraw();
-    error TierFull();
     error TierChangeForbidden();
 
     // --- Events ---
@@ -47,8 +47,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     );
 
     event TierPriceUpdated(uint8 indexed tier, uint128 priceUSD);
-    event DiscountUpdated(uint16 minMonths, uint16 percentOff);
-    event MaxSlotsUpdated(uint8 indexed tier, uint16 maxSlots);
+    event PricingHookUpdated(address pricingHook);
+    event GuardUpdated(address guard);
     event Withdrawal(address indexed to, uint256 amount);
     event ProjectNameUpdated(string name);
     event ProjectSymbolUpdated(string symbol);
@@ -61,9 +61,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // Pricing
     uint128[4] public tierPrices;
-    uint16 public discountMinMonths;
-    uint16 public discountPercentOff;
-    uint16[4] public maxSlots;
+    IPricingHook public pricingHook;
+
+    // Guard
+    IGuardHook public guard;
 
     // Subscription counter
     uint256 internal _tokenIdCounter;
@@ -78,10 +79,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     mapping(uint256 => uint64) public expiresAt;
     mapping(uint256 => Segment[]) internal _segments;
 
-    // Tier slots
-    mapping(uint8 => address[]) internal _tierHolders;
-    mapping(uint8 => mapping(address => uint256)) internal _tierHolderIndex; // 1-indexed; 0 = not present
-
     // --- Constructor ---
 
     constructor(
@@ -89,16 +86,11 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         string memory _projectSymbol,
         address _priceFeed,
         uint128[4] memory _tierPrices,
-        uint16 _discountMinMonths,
-        uint16 _discountPercentOff,
         uint256 _saleStart
     ) Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
-        if (_discountPercentOff > 100) revert InvalidDiscount();
         projectName = _projectName;
         projectSymbol = _projectSymbol;
         tierPrices = _tierPrices;
-        discountMinMonths = _discountMinMonths;
-        discountPercentOff = _discountPercentOff;
     }
 
     // --- Ownership Overrides ---
@@ -151,7 +143,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     function cost(uint8 tier, uint32 duration) external view returns (uint256) {
         if (tier >= 4) revert InvalidTier();
         if (duration == 0) revert InvalidDuration();
-        return _baseCost(tier, duration);
+        return _baseCost(tier, duration, address(0));
     }
 
     /// @notice Get the segments of a subscription.
@@ -164,35 +156,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         return _currentTier(tokenId);
     }
 
-    /// @notice Get the holders array for a tier (may contain stale entries).
-    /// @dev Use activeTierHolders() for a filtered list.
-    function tierHolders(uint8 tier) external view returns (address[] memory) {
-        return _tierHolders[tier];
+    /// @notice Get the active token for a supporter (0 if none/expired).
+    function activeTokenOf(address supporter) public view returns (uint256) {
+        return _activeTokenOf(supporter);
     }
-
-    /// @notice Get only the currently active holders for a tier.
-    function activeTierHolders(uint8 tier) external view returns (address[] memory) {
-        address[] storage holders = _tierHolders[tier];
-        uint256 count;
-        for (uint256 i; i < holders.length; ++i) {
-            address holder = holders[i];
-            uint256 token = _activeTokenOf(holder);
-            if (token != 0 && _lastTier(token) == tier) {
-                ++count;
-            }
-        }
-        address[] memory active = new address[](count);
-        uint256 j;
-        for (uint256 i; i < holders.length; ++i) {
-            address holder = holders[i];
-            uint256 token = _activeTokenOf(holder);
-            if (token != 0 && _lastTier(token) == tier) {
-                active[j++] = holder;
-            }
-        }
-        return active;
-    }
-
 
     // --- Owner ---
 
@@ -203,19 +170,16 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         emit TierPriceUpdated(tier, priceUSD);
     }
 
-    /// @notice Update the bulk discount parameters.
-    function setDiscount(uint16 minMonths, uint16 percentOff) external onlyOwner {
-        if (percentOff > 100) revert InvalidDiscount();
-        discountMinMonths = minMonths;
-        discountPercentOff = percentOff;
-        emit DiscountUpdated(minMonths, percentOff);
+    /// @notice Set the pricing hook contract (address(0) to disable).
+    function setPricingHook(IPricingHook _hook) external onlyOwner {
+        pricingHook = _hook;
+        emit PricingHookUpdated(address(_hook));
     }
 
-    /// @notice Set the max active subscribers for a tier (0 = unlimited).
-    function setMaxSlots(uint8 tier, uint16 max) external onlyOwner {
-        if (tier >= 4) revert InvalidTier();
-        maxSlots[tier] = max;
-        emit MaxSlotsUpdated(tier, max);
+    /// @notice Set the guard hook contract (address(0) to disable).
+    function setGuard(IGuardHook _guard) external onlyOwner {
+        guard = _guard;
+        emit GuardUpdated(address(_guard));
     }
 
     /// @notice Update the project name.
@@ -266,28 +230,31 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint64 newExpiry;
 
         if (isNew) {
-            if (!free) required = _baseCost(tier, duration);
+            if (!free) required = _baseCost(tier, duration, recipient);
             newExpiry = _addDuration(uint64(block.timestamp), duration);
         } else if (tier == previousTier) {
-            if (!free) required = _baseCost(tier, duration);
+            if (!free) required = _baseCost(tier, duration, recipient);
             newExpiry = _addDuration(expiresAt[tokenId], duration);
         } else {
-            (required, newExpiry) = _changeTier(expiresAt[tokenId], previousTier, tier, duration, free);
+            (required, newExpiry) = _changeTier(expiresAt[tokenId], previousTier, tier, duration, free, recipient);
         }
 
         tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry);
 
-        if (previousTier != type(uint8).max && previousTier != tier) {
-            _removeFromTier(previousTier, recipient);
+        IGuardHook g = guard;
+        if (address(g) != address(0)) {
+            if (previousTier != type(uint8).max && previousTier != tier) {
+                g.onRelease(previousTier, recipient);
+            }
+            g.onSubscribe(tier, recipient);
         }
-        _claimTierSlot(tier, recipient);
 
         _afterSubscriptionChange(tokenId);
         emit Supported(recipient, tier, tokenId, duration, required, newExpiry);
     }
 
     function _changeTier(
-        uint64 currentExpiry, uint8 fromTier, uint8 toTier, uint32 duration, bool free
+        uint64 currentExpiry, uint8 fromTier, uint8 toTier, uint32 duration, bool free, address subscriber
     ) private view returns (uint256 required, uint64 newExpiry) {
         uint64 remaining = currentExpiry - uint64(block.timestamp);
         uint128 oldPrice = tierPrices[fromTier];
@@ -296,13 +263,13 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (newPrice > oldPrice) {
             if (!free) {
                 uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-                required = _usdToEth(diffUSD + _discountedUSD(toTier, duration));
+                required = _usdToEth(diffUSD + _adjustedUSD(toTier, duration, subscriber));
             }
             newExpiry = _addDuration(currentExpiry, duration);
             return (required, newExpiry);
         }
 
-        if (!free) required = _baseCost(toTier, duration);
+        if (!free) required = _baseCost(toTier, duration, subscriber);
         uint256 converted = newPrice == 0
             ? uint256(remaining)
             : uint256(remaining) * oldPrice / newPrice;
@@ -327,39 +294,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         return tokenId;
     }
 
-    // --- Tier slots ---
-
-    function _claimTierSlot(uint8 tier, address supporter) internal {
-        uint16 max = maxSlots[tier];
-        if (max == 0) return;
-
-        // O(1) membership check
-        if (_tierHolderIndex[tier][supporter] != 0) return;
-
-        address[] storage holders = _tierHolders[tier];
-
-        // Room available — append
-        if (holders.length < max) {
-            holders.push(supporter);
-            _tierHolderIndex[tier][supporter] = holders.length;
-            return;
-        }
-
-        // Full — try to evict one stale entry
-        for (uint256 i; i < holders.length; ++i) {
-            address holder = holders[i];
-            uint256 token = _activeTokenOf(holder);
-            if (token == 0 || _lastTier(token) != tier) {
-                delete _tierHolderIndex[tier][holder];
-                holders[i] = supporter;
-                _tierHolderIndex[tier][supporter] = i + 1;
-                return;
-            }
-        }
-
-        revert TierFull();
-    }
-
     function _activeTokenOf(address supporter) internal view virtual returns (uint256 tokenId) {
         tokenId = activeToken[supporter];
         if (tokenId == 0 || block.timestamp >= expiresAt[tokenId]) {
@@ -372,30 +306,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (activeToken[supporter] != tokenId) {
             activeToken[supporter] = tokenId;
         }
-    }
-
-    function _addToTier(uint8 tier, address supporter) internal {
-        if (_tierHolderIndex[tier][supporter] != 0) return;
-        _tierHolders[tier].push(supporter);
-        _tierHolderIndex[tier][supporter] = _tierHolders[tier].length;
-    }
-
-    function _removeFromTier(uint8 tier, address supporter) internal {
-        uint256 idx = _tierHolderIndex[tier][supporter];
-        if (idx == 0) return;
-
-        address[] storage holders = _tierHolders[tier];
-        uint256 lastIndex = holders.length - 1;
-        uint256 removeIndex = idx - 1;
-
-        if (removeIndex != lastIndex) {
-            address last = holders[lastIndex];
-            holders[removeIndex] = last;
-            _tierHolderIndex[tier][last] = idx;
-        }
-
-        holders.pop();
-        delete _tierHolderIndex[tier][supporter];
     }
 
     /// @dev Safely add duration months to a base timestamp, capping at uint64 max.
@@ -419,16 +329,15 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Pricing ---
 
-    function _discountedUSD(uint8 tier, uint32 duration) internal view returns (uint256) {
-        uint256 totalUSD = uint256(tierPrices[tier]) * duration;
-        if (duration >= discountMinMonths && discountMinMonths > 0) {
-            totalUSD = totalUSD * (100 - discountPercentOff) / 100;
-        }
-        return totalUSD;
+    function _adjustedUSD(uint8 tier, uint32 duration, address subscriber) internal view returns (uint256) {
+        uint256 baseUSD = uint256(tierPrices[tier]) * duration;
+        IPricingHook hook = pricingHook;
+        if (address(hook) == address(0)) return baseUSD;
+        return hook.adjustCost(tier, duration, baseUSD, subscriber);
     }
 
-    function _baseCost(uint8 tier, uint32 duration) internal view returns (uint256) {
-        uint256 usd = _discountedUSD(tier, duration);
+    function _baseCost(uint8 tier, uint32 duration, address subscriber) internal view returns (uint256) {
+        uint256 usd = _adjustedUSD(tier, duration, subscriber);
         if (usd == 0) return 0;
         return _usdToEth(usd);
     }

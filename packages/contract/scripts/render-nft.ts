@@ -43,13 +43,16 @@ async function main() {
     logo,
     priceFeed.address,
     tierPrices,
-    12,
-    20,
     renderer.address,
     0n,
   ])
 
-  await support.write.setMaxSlots([3, 3])
+  const discountHook = await viem.deployContract('DiscountPricingHook', [12, 20])
+  await support.write.setPricingHook([discountHook.address])
+
+  const guard = await viem.deployContract('MaxSlotsGuard', [support.address])
+  await support.write.setGuard([guard.address])
+  await guard.write.setMaxSlots([3, 3])
 
   const wallets = await viem.getWalletClients()
 
