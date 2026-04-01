@@ -76,8 +76,16 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
 
         if (from == address(0) || to == address(0)) return from;
 
+        bool wasActive = block.timestamp < expiresAt[tokenId];
+        uint8 tier;
+        if (wasActive) tier = _lastTier(tokenId);
+
         _transferActiveToken(from, tokenId);
         _receiveActiveToken(to, tokenId);
+
+        if (wasActive) {
+            _migrateTierHolder(tier, from, to);
+        }
 
         return from;
     }
@@ -98,13 +106,35 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
         activeToken[from] = replacement;
     }
 
-    /// @dev Assign the transferred token as active if the receiver has none.
+    /// @dev Assign the transferred token as active if the receiver has no other
+    ///      active token. Skips the transferred token when scanning so that
+    ///      _activeTokenOf (which would find it) is not used.
     function _receiveActiveToken(address to, uint256 tokenId) private {
         if (block.timestamp >= expiresAt[tokenId]) return;
 
         uint256 existing = activeToken[to];
-        if (existing == 0 || block.timestamp >= expiresAt[existing]) {
-            activeToken[to] = tokenId;
+        if (existing != 0 && block.timestamp < expiresAt[existing]) return;
+
+        uint256 balance = balanceOf(to);
+        for (uint256 i; i < balance; ++i) {
+            uint256 candidate = tokenOfOwnerByIndex(to, i);
+            if (candidate != tokenId && block.timestamp < expiresAt[candidate]) {
+                return;
+            }
+        }
+
+        activeToken[to] = tokenId;
+    }
+
+    /// @dev Migrate tier-holder tracking when an active token is transferred.
+    ///      Must be called after _transferActiveToken / _receiveActiveToken.
+    function _migrateTierHolder(uint8 tier, address from, address to) private {
+        if (!_hasActiveTierToken(from, tier)) {
+            _removeFromTier(tier, from);
+        }
+
+        if (_hasActiveTierToken(to, tier)) {
+            _addToTier(tier, to);
         }
     }
 
@@ -116,6 +146,35 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
 
     function _afterSubscriptionChange(uint256 tokenId) internal override {
         emit MetadataUpdate(tokenId);
+    }
+
+    function _activeTokenOf(address supporter) internal view override returns (uint256 tokenId) {
+        tokenId = activeToken[supporter];
+        if (tokenId != 0 && block.timestamp < expiresAt[tokenId]) {
+            return tokenId;
+        }
+
+        uint256 balance = balanceOf(supporter);
+        for (uint256 i; i < balance; ++i) {
+            uint256 candidate = tokenOfOwnerByIndex(supporter, i);
+            if (block.timestamp < expiresAt[candidate]) {
+                return candidate;
+            }
+        }
+
+        return 0;
+    }
+
+    function _hasActiveTierToken(address supporter, uint8 tier) private view returns (bool) {
+        uint256 balance = balanceOf(supporter);
+        for (uint256 i; i < balance; ++i) {
+            uint256 tokenId = tokenOfOwnerByIndex(supporter, i);
+            if (block.timestamp < expiresAt[tokenId] && _lastTier(tokenId) == tier) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // --- Owner ---

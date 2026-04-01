@@ -1282,6 +1282,250 @@ describe("Support", async function () {
 
   });
 
+  // --- Tier slot migration on transfer ---
+
+  it("Should block new subscriber after transfer keeps tier full", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    // Cap tier 2 at 1 slot
+    await support.write.setMaxSlots([2, 1]);
+    const cost2 = await support.read.cost([2, 3]);
+
+    // Alice subscribes at tier 2
+    await support.write.support([wallets[0].account.address, 2, 3], { value: cost2, account: wallets[0].account });
+    assert.equal((await support.read.activeTierHolders([2])).length, 1);
+
+    // Alice transfers active NFT to Bob
+    await support.write.transferFrom(
+      [wallets[0].account.address, wallets[1].account.address, 1n],
+      { account: wallets[0].account },
+    );
+
+    // Bob now holds the slot — tier is still full
+    const active = await support.read.activeTierHolders([2]);
+    assert.equal(active.length, 1);
+    assert.equal(active[0], getAddress(wallets[1].account.address));
+
+    // Charlie cannot subscribe — tier is full
+    await assert.rejects(
+      support.write.support([wallets[2].account.address, 2, 1], {
+        value: await support.read.cost([2, 1]),
+        account: wallets[2].account,
+      }),
+      /TierFull/,
+    );
+  });
+
+  it("Should migrate tier holder entry on transfer", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([3, 2]);
+    const cost3 = await support.read.cost([3, 2]);
+
+    // Two holders in tier 3
+    await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
+    await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
+    assert.equal((await support.read.tierHolders([3])).length, 2);
+
+    // wallets[0] transfers to wallets[2]
+    await support.write.transferFrom(
+      [wallets[0].account.address, wallets[2].account.address, 1n],
+      { account: wallets[0].account },
+    );
+
+    // tierHolders should now contain wallets[1] and wallets[2], not wallets[0]
+    const holders = await support.read.tierHolders([3]);
+    assert.equal(holders.length, 2);
+    const holderSet = new Set(holders.map((h: string) => h.toLowerCase()));
+    assert.ok(!holderSet.has(wallets[0].account.address.toLowerCase()));
+    assert.ok(holderSet.has(wallets[1].account.address.toLowerCase()));
+    assert.ok(holderSet.has(wallets[2].account.address.toLowerCase()));
+  });
+
+  it("Should not modify tier holders when transferring expired token", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support, priceFeed } = await deploy();
+
+    await support.write.setMaxSlots([0, 2]);
+
+    await support.write.support([wallets[0].account.address, 0, 1], {
+      value: await support.read.cost([0, 1]),
+      account: wallets[0].account,
+    });
+    assert.equal((await support.read.tierHolders([0])).length, 1);
+
+    // Expire
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    // Transfer expired token — should not add wallets[1] to tier
+    await support.write.transferFrom(
+      [wallets[0].account.address, wallets[1].account.address, 1n],
+      { account: wallets[0].account },
+    );
+
+    // Tier holders unchanged (wallets[0] still listed, stale)
+    const holders = await support.read.tierHolders([0]);
+    assert.equal(holders.length, 1);
+    assert.equal(holders[0], getAddress(wallets[0].account.address));
+
+    // No active holders
+    assert.equal((await support.read.activeTierHolders([0])).length, 0);
+  });
+
+  it("Should not add receiver to tier if they already have an active token", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([2, 2]);
+
+    // Both wallets subscribe at tier 2
+    await support.write.support([wallets[0].account.address, 2, 3], {
+      value: await support.read.cost([2, 3]),
+      account: wallets[0].account,
+    });
+    await support.write.support([wallets[1].account.address, 2, 3], {
+      value: await support.read.cost([2, 3]),
+      account: wallets[1].account,
+    });
+
+    // Transfer token 1 to wallets[1] — their activeToken stays as token 2
+    await support.write.transferFrom(
+      [wallets[0].account.address, wallets[1].account.address, 1n],
+      { account: wallets[0].account },
+    );
+
+    assert.equal(await support.read.activeToken([wallets[1].account.address]), 2n);
+
+    // wallets[0] removed from tier, wallets[1] still there (already was)
+    const holders = await support.read.tierHolders([2]);
+    assert.equal(holders.length, 1);
+    assert.equal(holders[0], getAddress(wallets[1].account.address));
+  });
+
+  it("Should allow Alice to resubscribe after transferring away her active token", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([2, 2]);
+    const cost2 = await support.read.cost([2, 2]);
+
+    // Alice subscribes
+    await support.write.support([wallets[0].account.address, 2, 2], { value: cost2, account: wallets[0].account });
+    assert.equal((await support.read.tierHolders([2])).length, 1);
+
+    // Transfer to Bob
+    await support.write.transferFrom(
+      [wallets[0].account.address, wallets[1].account.address, 1n],
+      { account: wallets[0].account },
+    );
+
+    // Alice resubscribes — should work since she was removed from tier
+    await support.write.support([wallets[0].account.address, 2, 1], {
+      value: await support.read.cost([2, 1]),
+      account: wallets[0].account,
+    });
+
+    const holders = await support.read.tierHolders([2]);
+    assert.equal(holders.length, 2);
+    const active = await support.read.activeTierHolders([2]);
+    assert.equal(active.length, 2);
+  });
+
+  it("Should keep expired activeToken pointers from hiding another active subscription", async function () {
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([2, 1]);
+
+    await support.write.support([walletClient.account.address, 0, 1], {
+      value: await support.read.cost([0, 1]),
+    });
+    await support.write.support([otherWallet.account.address, 2, 3], {
+      value: await support.read.cost([2, 3]),
+      account: otherWallet.account,
+    });
+    await support.write.transferFrom(
+      [otherWallet.account.address, walletClient.account.address, 2n],
+      { account: otherWallet.account },
+    );
+
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
+
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+
+    const active = await support.read.activeTierHolders([2]);
+    assert.equal(active.length, 1);
+    assert.equal(active[0], getAddress(walletClient.account.address));
+  });
+
+  it("Should extend the surviving active token after the selected pointer expires", async function () {
+    const { support, priceFeed } = await deploy();
+
+    await support.write.support([walletClient.account.address, 0, 1], {
+      value: await support.read.cost([0, 1]),
+    });
+    await support.write.support([otherWallet.account.address, 2, 3], {
+      value: await support.read.cost([2, 3]),
+      account: otherWallet.account,
+    });
+    await support.write.transferFrom(
+      [otherWallet.account.address, walletClient.account.address, 2n],
+      { account: otherWallet.account },
+    );
+
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    const expiryBefore = await support.read.expiresAt([2n]);
+    await support.write.support([walletClient.account.address, 2, 1], {
+      value: await support.read.cost([2, 1]),
+    });
+
+    assert.equal(await support.read.totalSupply(), 2n);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 2n);
+    assert.equal(
+      await support.read.expiresAt([2n]),
+      expiryBefore + 30n * 24n * 60n * 60n,
+    );
+  });
+
+  it("Should keep tier slots full when a different owned token remains active", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support, priceFeed } = await deploy();
+
+    await support.write.setMaxSlots([2, 1]);
+
+    await support.write.support([wallets[0].account.address, 0, 1], {
+      value: await support.read.cost([0, 1]),
+      account: wallets[0].account,
+    });
+    await support.write.support([wallets[1].account.address, 2, 3], {
+      value: await support.read.cost([2, 3]),
+      account: wallets[1].account,
+    });
+    await support.write.transferFrom(
+      [wallets[1].account.address, wallets[0].account.address, 2n],
+      { account: wallets[1].account },
+    );
+
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    await assert.rejects(
+      support.write.support([wallets[2].account.address, 2, 1], {
+        value: await support.read.cost([2, 1]),
+        account: wallets[2].account,
+      }),
+      /TierFull/,
+    );
+  });
+
   // --- Free tier mass registration ---
 
   it("Should allow mass registration at free tier (tierPrice = 0)", async function () {

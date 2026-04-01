@@ -123,8 +123,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     function support(address recipient, uint8 tier, uint32 duration) external payable afterSaleStart {
         if (recipient == address(0)) revert InvalidRecipient();
 
-        uint256 tokenId = activeToken[recipient];
-        bool isActive = tokenId != 0 && block.timestamp < expiresAt[tokenId];
+        uint256 tokenId = _activeTokenOf(recipient);
+        bool isActive = tokenId != 0;
         if (isActive && tier != _lastTier(tokenId)
             && msg.sender != recipient && msg.sender != owner()) {
             revert TierChangeForbidden();
@@ -176,8 +176,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint256 count;
         for (uint256 i; i < holders.length; ++i) {
             address holder = holders[i];
-            uint256 token = activeToken[holder];
-            if (token != 0 && block.timestamp < expiresAt[token] && _lastTier(token) == tier) {
+            uint256 token = _activeTokenOf(holder);
+            if (token != 0 && _lastTier(token) == tier) {
                 ++count;
             }
         }
@@ -185,8 +185,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint256 j;
         for (uint256 i; i < holders.length; ++i) {
             address holder = holders[i];
-            uint256 token = activeToken[holder];
-            if (token != 0 && block.timestamp < expiresAt[token] && _lastTier(token) == tier) {
+            uint256 token = _activeTokenOf(holder);
+            if (token != 0 && _lastTier(token) == tier) {
                 active[j++] = holder;
             }
         }
@@ -254,10 +254,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ) internal returns (uint256 required) {
         if (tier >= 4) revert InvalidTier();
 
-        uint256 tokenId = activeToken[recipient];
-        bool isNew = tokenId == 0 || block.timestamp >= expiresAt[tokenId];
+        uint256 previousTokenId = activeToken[recipient];
+        uint256 tokenId = _syncActiveToken(recipient);
+        bool isNew = tokenId == 0;
 
-        uint8 previousTier = tokenId != 0 ? _lastTier(tokenId) : type(uint8).max;
+        if (tokenId != 0) previousTokenId = tokenId;
+        uint8 previousTier = previousTokenId != 0 ? _lastTier(previousTokenId) : type(uint8).max;
 
         // New subscriptions require duration >= 1. Active tier changes allow 0.
         if (duration == 0 && (isNew || tier == previousTier)) revert InvalidDuration();
@@ -346,10 +348,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         // Full — try to evict one stale entry
         for (uint256 i; i < holders.length; ++i) {
             address holder = holders[i];
-            uint256 token = activeToken[holder];
-            if (token == 0
-                || block.timestamp >= expiresAt[token]
-                || _lastTier(token) != tier) {
+            uint256 token = _activeTokenOf(holder);
+            if (token == 0 || _lastTier(token) != tier) {
                 delete _tierHolderIndex[tier][holder];
                 holders[i] = supporter;
                 _tierHolderIndex[tier][supporter] = i + 1;
@@ -358,6 +358,26 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         }
 
         revert TierFull();
+    }
+
+    function _activeTokenOf(address supporter) internal view virtual returns (uint256 tokenId) {
+        tokenId = activeToken[supporter];
+        if (tokenId == 0 || block.timestamp >= expiresAt[tokenId]) {
+            return 0;
+        }
+    }
+
+    function _syncActiveToken(address supporter) internal virtual returns (uint256 tokenId) {
+        tokenId = _activeTokenOf(supporter);
+        if (activeToken[supporter] != tokenId) {
+            activeToken[supporter] = tokenId;
+        }
+    }
+
+    function _addToTier(uint8 tier, address supporter) internal {
+        if (_tierHolderIndex[tier][supporter] != 0) return;
+        _tierHolders[tier].push(supporter);
+        _tierHolderIndex[tier][supporter] = _tierHolders[tier].length;
     }
 
     function _removeFromTier(uint8 tier, address supporter) internal {
