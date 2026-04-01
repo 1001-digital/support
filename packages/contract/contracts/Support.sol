@@ -35,6 +35,7 @@ contract Support is ERC721, Ownable2Step {
     error NothingToWithdraw();
     error TierFull();
     error TierChangeForbidden();
+    error InvalidPriceFeed();
     error UnsafeString();
 
     // --- Types ---
@@ -227,7 +228,7 @@ contract Support is ERC721, Ownable2Step {
 
     /// @notice Update the Chainlink price feed address.
     function setPriceFeed(address _priceFeed) external onlyOwner {
-        if (_priceFeed == address(0)) revert InvalidRecipient();
+        if (_priceFeed == address(0)) revert InvalidPriceFeed();
         priceFeed = AggregatorV3Interface(_priceFeed);
         emit PriceFeedUpdated(_priceFeed);
     }
