@@ -74,30 +74,38 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
     function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
         address from = super._update(to, tokenId, auth);
 
-        // Subscription bookkeeping on transfer (not on mint)
-        if (from != address(0) && to != address(0)) {
-            if (activeToken[from] == tokenId) {
-                uint256 replacement = 0;
-                uint256 balance = balanceOf(from);
-                for (uint256 i = 0; i < balance; i++) {
-                    uint256 candidate = tokenOfOwnerByIndex(from, i);
-                    if (block.timestamp < expiresAt[candidate]) {
-                        replacement = candidate;
-                        break;
-                    }
-                }
-                activeToken[from] = replacement;
-            }
+        if (from == address(0) || to == address(0)) return from;
 
-            if (block.timestamp < expiresAt[tokenId]) {
-                uint256 existing = activeToken[to];
-                if (existing == 0 || block.timestamp >= expiresAt[existing]) {
-                    activeToken[to] = tokenId;
-                }
-            }
-        }
+        _transferActiveToken(from, tokenId);
+        _receiveActiveToken(to, tokenId);
 
         return from;
+    }
+
+    /// @dev When the sender's active token is transferred, find a replacement.
+    function _transferActiveToken(address from, uint256 tokenId) private {
+        if (activeToken[from] != tokenId) return;
+
+        uint256 replacement;
+        uint256 balance = balanceOf(from);
+        for (uint256 i; i < balance; ++i) {
+            uint256 candidate = tokenOfOwnerByIndex(from, i);
+            if (block.timestamp < expiresAt[candidate]) {
+                replacement = candidate;
+                break;
+            }
+        }
+        activeToken[from] = replacement;
+    }
+
+    /// @dev Assign the transferred token as active if the receiver has none.
+    function _receiveActiveToken(address to, uint256 tokenId) private {
+        if (block.timestamp >= expiresAt[tokenId]) return;
+
+        uint256 existing = activeToken[to];
+        if (existing == 0 || block.timestamp >= expiresAt[existing]) {
+            activeToken[to] = tokenId;
+        }
     }
 
     // --- Hook Overrides ---

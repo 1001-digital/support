@@ -259,45 +259,23 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
         // New subscriptions require duration >= 1. Active tier changes allow 0.
         if (duration == 0 && (isNew || tier == _lastTier(tokenId))) revert InvalidDuration();
+
+        // Capture previous tier before _applySubscription modifies segments
+        uint8 previousTier = tokenId != 0 ? _lastTier(tokenId) : type(uint8).max;
         uint64 newExpiry;
 
         if (isNew) {
             if (!free) required = _baseCost(tier, duration);
             newExpiry = _addDuration(uint64(block.timestamp), duration);
+        } else if (tier == previousTier) {
+            if (!free) required = _baseCost(tier, duration);
+            newExpiry = _addDuration(expiresAt[tokenId], duration);
         } else {
-            uint8 activeTier = _lastTier(tokenId);
-
-            if (tier == activeTier) {
-                if (!free) required = _baseCost(tier, duration);
-                newExpiry = _addDuration(expiresAt[tokenId], duration);
-            } else {
-                uint64 remaining = expiresAt[tokenId] - uint64(block.timestamp);
-                uint128 oldPrice = tierPrices[activeTier];
-                uint128 newPrice = tierPrices[tier];
-
-                if (newPrice > oldPrice) {
-                    if (!free) {
-                        uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-                        required = _usdToEth(diffUSD + _discountedUSD(tier, duration));
-                    }
-                    newExpiry = _addDuration(expiresAt[tokenId], duration);
-                } else {
-                    if (!free) required = _baseCost(tier, duration);
-                    uint256 rawConverted = newPrice == 0
-                        ? uint256(remaining)
-                        : uint256(remaining) * oldPrice / newPrice;
-                    uint256 rawExpiry = uint256(block.timestamp) + rawConverted + uint256(duration) * 30 days;
-                    newExpiry = rawExpiry > type(uint64).max ? type(uint64).max : uint64(rawExpiry);
-                }
-            }
+            (required, newExpiry) = _changeTier(tokenId, previousTier, tier, duration, free);
         }
-
-        // Capture previous tier before _applySubscription modifies segments
-        uint8 previousTier = tokenId != 0 ? _lastTier(tokenId) : type(uint8).max;
 
         tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry);
 
-        // Eagerly remove from old tier on tier change (keeps array compact)
         if (previousTier != type(uint8).max && previousTier != tier) {
             _removeFromTier(previousTier, recipient);
         }
@@ -305,6 +283,32 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
         _afterSubscriptionChange(tokenId);
         emit Supported(recipient, tier, tokenId, duration, required, newExpiry);
+    }
+
+    function _changeTier(
+        uint256 tokenId, uint8 fromTier, uint8 toTier, uint32 duration, bool free
+    ) private view returns (uint256 required, uint64 newExpiry) {
+        uint64 remaining = expiresAt[tokenId] - uint64(block.timestamp);
+        uint128 oldPrice = tierPrices[fromTier];
+        uint128 newPrice = tierPrices[toTier];
+
+        // Upgrade: charge the price difference for remaining time + new duration
+        if (newPrice > oldPrice) {
+            if (!free) {
+                uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
+                required = _usdToEth(diffUSD + _discountedUSD(toTier, duration));
+            }
+            newExpiry = _addDuration(expiresAt[tokenId], duration);
+            return (required, newExpiry);
+        }
+
+        // Downgrade: convert remaining time at the price ratio + add new duration
+        if (!free) required = _baseCost(toTier, duration);
+        uint256 converted = newPrice == 0
+            ? uint256(remaining)
+            : uint256(remaining) * oldPrice / newPrice;
+        uint256 rawExpiry = uint256(block.timestamp) + converted + uint256(duration) * 30 days;
+        newExpiry = rawExpiry > type(uint64).max ? type(uint64).max : uint64(rawExpiry);
     }
 
     function _applySubscription(
