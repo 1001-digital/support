@@ -592,6 +592,196 @@ describe("Support", async function () {
     assert.equal(holders[0], getAddress(wallets[1].account.address));
   });
 
+  // --- activeTierHolders ---
+
+  it("Should filter expired holders from activeTierHolders", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support, priceFeed } = await deploy();
+
+    await support.write.setMaxSlots([3, 3]);
+    const cost3 = await support.read.cost([3, 1]);
+
+    // Three holders subscribe to tier 3
+    await support.write.support([wallets[0].account.address, 3, 1], { value: cost3, account: wallets[0].account });
+    await support.write.support([wallets[1].account.address, 3, 1], { value: cost3, account: wallets[1].account });
+    await support.write.support([wallets[2].account.address, 3, 2], { value: await support.read.cost([3, 2]), account: wallets[2].account });
+
+    // All three appear in both views
+    assert.equal((await support.read.tierHolders([3])).length, 3);
+    assert.equal((await support.read.activeTierHolders([3])).length, 3);
+
+    // Expire wallets[0] and wallets[1]
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    // Raw array still has 3 entries, but only wallets[2] is active
+    assert.equal((await support.read.tierHolders([3])).length, 3);
+    const active = await support.read.activeTierHolders([3]);
+    assert.equal(active.length, 1);
+    assert.equal(active[0], getAddress(wallets[2].account.address));
+  });
+
+  it("Should filter tier-changed holders from activeTierHolders", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([2, 2]);
+    await support.write.setMaxSlots([3, 2]);
+
+    // Two holders in tier 3
+    const cost3 = await support.read.cost([3, 2]);
+    await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
+    await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
+
+    assert.equal((await support.read.activeTierHolders([3])).length, 2);
+
+    // wallets[0] downgrades to tier 2
+    await support.write.support([wallets[0].account.address, 2, 1], { value: parseEther("1"), account: wallets[0].account });
+
+    // Tier 3 should only show wallets[1]
+    const active3 = await support.read.activeTierHolders([3]);
+    assert.equal(active3.length, 1);
+    assert.equal(active3[0], getAddress(wallets[1].account.address));
+
+    // Tier 2 should show wallets[0]
+    const active2 = await support.read.activeTierHolders([2]);
+    assert.equal(active2.length, 1);
+    assert.equal(active2[0], getAddress(wallets[0].account.address));
+  });
+
+  it("Should return empty for activeTierHolders when maxSlots is 0", async function () {
+    const { support } = await deploy();
+
+    // maxSlots defaults to 0 (unlimited / no tracking)
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+
+    const active = await support.read.activeTierHolders([0]);
+    assert.equal(active.length, 0);
+  });
+
+  // --- Tier slot compaction ---
+
+  it("Should compact tier array on downgrade via swap-and-pop", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([3, 3]);
+    const cost3 = await support.read.cost([3, 2]);
+
+    // Fill 3 slots: [w0, w1, w2]
+    await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
+    await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
+    await support.write.support([wallets[2].account.address, 3, 2], { value: cost3, account: wallets[2].account });
+    assert.equal((await support.read.tierHolders([3])).length, 3);
+
+    // w0 downgrades — array should shrink to 2 via swap-and-pop: [w2, w1]
+    await support.write.support([wallets[0].account.address, 0, 1], { value: parseEther("1"), account: wallets[0].account });
+    const holders = await support.read.tierHolders([3]);
+    assert.equal(holders.length, 2);
+
+    // w1 downgrades — array should shrink to 1: [w2]
+    await support.write.support([wallets[1].account.address, 0, 1], { value: parseEther("1"), account: wallets[1].account });
+    const holders2 = await support.read.tierHolders([3]);
+    assert.equal(holders2.length, 1);
+    assert.equal(holders2[0], getAddress(wallets[2].account.address));
+  });
+
+  it("Should allow new subscriber after compaction frees a slot", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([3, 2]);
+    const cost3 = await support.read.cost([3, 2]);
+
+    // Fill both slots
+    await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
+    await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
+
+    // Full
+    await assert.rejects(
+      support.write.support([wallets[2].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[2].account }),
+      /TierFull/,
+    );
+
+    // w0 downgrades — compacts array, freeing a slot
+    await support.write.support([wallets[0].account.address, 0, 1], { value: parseEther("1"), account: wallets[0].account });
+    assert.equal((await support.read.tierHolders([3])).length, 1);
+
+    // w2 can now join
+    await support.write.support([wallets[2].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[2].account });
+    const holders = await support.read.tierHolders([3]);
+    assert.equal(holders.length, 2);
+  });
+
+  // --- O(1) duplicate check ---
+
+  it("Should not duplicate holder on same-tier extension", async function () {
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([0, 2]);
+    const cost0 = await support.read.cost([0, 1]);
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost0 });
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost0 });
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost0 });
+
+    const holders = await support.read.tierHolders([0]);
+    assert.equal(holders.length, 1);
+    assert.equal(holders[0], getAddress(walletClient.account.address));
+  });
+
+  // --- Re-subscribe after expiry ---
+
+  it("Should remove from old tier when re-subscribing to different tier after expiry", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support, priceFeed } = await deploy();
+
+    await support.write.setMaxSlots([0, 2]);
+    await support.write.setMaxSlots([3, 2]);
+
+    // Subscribe to tier 3
+    await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
+    assert.equal((await support.read.tierHolders([3])).length, 1);
+
+    // Expire
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    // Re-subscribe to tier 0
+    await support.write.support([wallets[0].account.address, 0, 1], { value: await support.read.cost([0, 1]), account: wallets[0].account });
+
+    // Should be removed from tier 3, added to tier 0
+    assert.equal((await support.read.tierHolders([3])).length, 0);
+    const holders0 = await support.read.tierHolders([0]);
+    assert.equal(holders0.length, 1);
+    assert.equal(holders0[0], getAddress(wallets[0].account.address));
+  });
+
+  it("Should keep holder in same tier when re-subscribing after expiry", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support, priceFeed } = await deploy();
+
+    await support.write.setMaxSlots([3, 2]);
+
+    await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
+    assert.equal((await support.read.tierHolders([3])).length, 1);
+
+    // Expire
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    // Re-subscribe to same tier
+    await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
+
+    // Still one entry, no duplicate
+    const holders = await support.read.tierHolders([3]);
+    assert.equal(holders.length, 1);
+    assert.equal(holders[0], getAddress(wallets[0].account.address));
+  });
+
   // --- Edge cases ---
 
   it("Should handle 100% discount", async function () {

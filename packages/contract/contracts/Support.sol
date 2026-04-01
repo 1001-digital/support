@@ -77,6 +77,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // Tier slots
     mapping(uint8 => address[]) internal _tierHolders;
+    mapping(uint8 => mapping(address => uint256)) internal _tierHolderIndex; // 1-indexed; 0 = not present
 
     // --- Constructor ---
 
@@ -160,9 +161,33 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         return _currentTier(tokenId);
     }
 
-    /// @notice Get the active holders for a tier.
+    /// @notice Get the holders array for a tier (may contain stale entries).
+    /// @dev Use activeTierHolders() for a filtered list.
     function tierHolders(uint8 tier) external view returns (address[] memory) {
         return _tierHolders[tier];
+    }
+
+    /// @notice Get only the currently active holders for a tier.
+    function activeTierHolders(uint8 tier) external view returns (address[] memory) {
+        address[] storage holders = _tierHolders[tier];
+        uint256 count;
+        for (uint256 i; i < holders.length; ++i) {
+            address holder = holders[i];
+            uint256 token = activeToken[holder];
+            if (token != 0 && block.timestamp < expiresAt[token] && _lastTier(token) == tier) {
+                ++count;
+            }
+        }
+        address[] memory active = new address[](count);
+        uint256 j;
+        for (uint256 i; i < holders.length; ++i) {
+            address holder = holders[i];
+            uint256 token = activeToken[holder];
+            if (token != 0 && block.timestamp < expiresAt[token] && _lastTier(token) == tier) {
+                active[j++] = holder;
+            }
+        }
+        return active;
     }
 
 
@@ -264,7 +289,15 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
             }
         }
 
+        // Capture previous tier before _applySubscription modifies segments
+        uint8 previousTier = tokenId != 0 ? _lastTier(tokenId) : type(uint8).max;
+
         tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry);
+
+        // Eagerly remove from old tier on tier change (keeps array compact)
+        if (previousTier != type(uint8).max && previousTier != tier) {
+            _removeFromTier(previousTier, recipient);
+        }
         _claimTierSlot(tier, recipient);
 
         _afterSubscriptionChange(tokenId);
@@ -295,28 +328,51 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint16 max = maxSlots[tier];
         if (max == 0) return;
 
+        // O(1) membership check
+        if (_tierHolderIndex[tier][supporter] != 0) return;
+
         address[] storage holders = _tierHolders[tier];
 
-        for (uint256 i; i < holders.length; ++i) {
-            if (holders[i] == supporter) return;
+        // Room available — append
+        if (holders.length < max) {
+            holders.push(supporter);
+            _tierHolderIndex[tier][supporter] = holders.length;
+            return;
         }
 
+        // Full — try to evict one stale entry
         for (uint256 i; i < holders.length; ++i) {
-            uint256 token = activeToken[holders[i]];
+            address holder = holders[i];
+            uint256 token = activeToken[holder];
             if (token == 0
                 || block.timestamp >= expiresAt[token]
                 || _lastTier(token) != tier) {
+                delete _tierHolderIndex[tier][holder];
                 holders[i] = supporter;
+                _tierHolderIndex[tier][supporter] = i + 1;
                 return;
             }
         }
 
-        if (holders.length < max) {
-            holders.push(supporter);
-            return;
+        revert TierFull();
+    }
+
+    function _removeFromTier(uint8 tier, address supporter) internal {
+        uint256 idx = _tierHolderIndex[tier][supporter];
+        if (idx == 0) return;
+
+        address[] storage holders = _tierHolders[tier];
+        uint256 lastIndex = holders.length - 1;
+        uint256 removeIndex = idx - 1;
+
+        if (removeIndex != lastIndex) {
+            address last = holders[lastIndex];
+            holders[removeIndex] = last;
+            _tierHolderIndex[tier][last] = idx;
         }
 
-        revert TierFull();
+        holders.pop();
+        delete _tierHolderIndex[tier][supporter];
     }
 
     /// @dev Safely add duration months to a base timestamp, capping at uint64 max.
