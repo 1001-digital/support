@@ -76,7 +76,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     mapping(address => uint256) public activeToken;
     mapping(uint256 => uint64) public startedAt;
     mapping(uint256 => uint64) public expiresAt;
-    mapping(uint256 => address) public subscriberOf;
     mapping(uint256 => Segment[]) internal _segments;
 
     // Tier slots
@@ -315,7 +314,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
             tokenId = ++_tokenIdCounter;
             _onNewSubscription(recipient, tokenId);
             activeToken[recipient] = tokenId;
-            subscriberOf[tokenId] = recipient;
             startedAt[tokenId] = uint64(block.timestamp);
             _segments[tokenId].push(Segment(tier, uint64(block.timestamp)));
         } else if (tier != _lastTier(tokenId)) {

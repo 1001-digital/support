@@ -47,11 +47,8 @@ Subscription data is stored per token:
 ```solidity
 mapping(uint256 => uint64) public startedAt;
 mapping(uint256 => uint64) public expiresAt;
-mapping(uint256 => address) public subscriberOf;
 mapping(uint256 => Segment[]) internal _segments;
 ```
-
-`subscriberOf` records the last active subscriber — preserved across transfers for provenance.
 
 ### Tier Changes
 

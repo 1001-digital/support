@@ -267,13 +267,6 @@ export const SupportAbi = [
     inputs: [{ name: "", type: "uint256" }],
     outputs: [{ name: "", type: "uint64" }],
   },
-  {
-    type: "function",
-    name: "subscriberOf",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "uint256" }],
-    outputs: [{ name: "", type: "address" }],
-  },
 
   // --- ERC-721 ---
   {

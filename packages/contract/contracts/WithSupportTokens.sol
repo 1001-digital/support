@@ -42,14 +42,14 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
     }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
-        _requireOwned(tokenId);
+        address owner = _requireOwned(tokenId);
 
         (uint8 tier, bool active) = _currentTier(tokenId);
         uint8 displayTier = active ? tier : _lastTier(tokenId);
 
         ISupportRenderer.TokenData memory data = ISupportRenderer.TokenData({
             tokenId: tokenId,
-            subscriber: subscriberOf[tokenId],
+            subscriber: owner,
             projectName: projectName,
             logo: logo,
             startedAt: startedAt[tokenId],

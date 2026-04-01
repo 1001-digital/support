@@ -1096,35 +1096,239 @@ describe("Support", async function () {
     assert.equal(await support.read.totalSupply(), 1n); // no new NFT
   });
 
-  // --- subscriberOf stability ---
+  // --- Reentrancy through excess refund ---
 
-  it("Should not change subscriberOf on extension or tier change", async function () {
+  it("Should handle reentrancy through excess refund without corruption", async function () {
     const { support } = await deploy();
+    const attacker = await viem.deployContract("ReentrancyAttacker", [support.address]);
 
-    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+    const ethCost = await support.read.cost([0, 1]);
 
-    // Extend same tier
-    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+    // Fund attacker with enough ETH to cover cost + re-entrant extension
+    await walletClient.sendTransaction({ to: attacker.address, value: ethCost * 5n });
+    await attacker.write.attack([0, 1, 1], { value: ethCost * 3n });
 
-    // Upgrade tier
-    await support.write.support([walletClient.account.address, 2, 1], { value: parseEther("1") });
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+    const tokenId = await support.read.activeToken([attacker.address]);
+    assert.ok(tokenId > 0n);
+
+    // State should be consistent despite re-entrant extension
+    const started = await support.read.startedAt([tokenId]);
+    const expires = await support.read.expiresAt([tokenId]);
+    assert.ok(expires > started);
+
+    const segs = await support.read.segments([tokenId]);
+    assert.equal(segs.length, 1);
+    assert.equal(segs[0].tier, 0);
   });
 
-  it("Should preserve subscriberOf after transfer", async function () {
+  // --- Extreme duration values ---
+
+  it("Should handle type(uint32).max duration via grant", async function () {
+    const { support } = await deploy();
+    const maxDuration = 2 ** 32 - 1; // type(uint32).max = 4294967295
+
+    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+
+    const tokenId = await support.read.activeToken([otherWallet.account.address]);
+    assert.equal(tokenId, 1n);
+
+    const expires = await support.read.expiresAt([tokenId]);
+    const started = await support.read.startedAt([tokenId]);
+
+    const uint64Max = (1n << 64n) - 1n;
+    const expectedDuration = BigInt(maxDuration) * 30n * 24n * 60n * 60n;
+    const expectedExpiry = started + expectedDuration;
+
+    if (expectedExpiry > uint64Max) {
+      assert.equal(expires, uint64Max);
+    } else {
+      assert.equal(expires, expectedExpiry);
+    }
+
+    const [tier, active] = await support.read.currentTier([tokenId]);
+    assert.equal(tier, 0);
+    assert.equal(active, true);
+  });
+
+  it("Should cap expiry at uint64.max on repeated large extensions", async function () {
+    const { support } = await deploy();
+    const maxDuration = 2 ** 32 - 1;
+
+    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+
+    const tokenId = await support.read.activeToken([otherWallet.account.address]);
+    const expires = await support.read.expiresAt([tokenId]);
+    const uint64Max = (1n << 64n) - 1n;
+
+    assert.ok(expires > 0n);
+    assert.ok(expires <= uint64Max);
+
+    // Should still be one token, not multiple
+    assert.equal(await support.read.totalSupply(), 1n);
+  });
+
+  // --- Rapid tier switching ---
+
+  it("Should handle many tier switches and render tokenURI", async function () {
     const { support } = await deploy();
 
-    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+    await support.write.grant([walletClient.account.address, 0, 12]);
 
-    // Transfer to otherWallet
+    // Switch tiers via grant (avoids compounding cost from time conversion)
+    const switches = [1, 2, 3, 2, 1, 0, 3] as const;
+    for (const tier of switches) {
+      await support.write.grant([walletClient.account.address, tier, 1]);
+    }
+
+    const segs = await support.read.segments([1n]);
+    assert.equal(segs.length, 8);
+    assert.equal(segs[0].tier, 0);
+    assert.equal(segs[7].tier, 3);
+
+    // tokenURI should render all 8 segments without reverting
+    const uri = await support.read.tokenURI([1n]);
+    const json = JSON.parse(Buffer.from(uri.split(",")[1], "base64").toString());
+    assert.ok(json.attributes.find((a: any) => a.trait_type === "Segment 8"));
+    assert.equal(json.attributes.find((a: any) => a.trait_type === "Tier").value, 3);
+  });
+
+  // --- maxSlots edge cases ---
+
+  it("Should handle decreasing maxSlots below current holder count", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([0, 3]);
+    const cost0 = await support.read.cost([0, 2]);
+
+    await support.write.support([wallets[0].account.address, 0, 2], { value: cost0, account: wallets[0].account });
+    await support.write.support([wallets[1].account.address, 0, 2], { value: cost0, account: wallets[1].account });
+    await support.write.support([wallets[2].account.address, 0, 2], { value: cost0, account: wallets[2].account });
+    assert.equal((await support.read.tierHolders([0])).length, 3);
+
+    // Decrease below current count — existing holders stay, new ones blocked
+    await support.write.setMaxSlots([0, 1]);
+
+    await assert.rejects(
+      support.write.support([wallets[3].account.address, 0, 1], {
+        value: await support.read.cost([0, 1]),
+        account: wallets[3].account,
+      }),
+      /TierFull/,
+    );
+
+    await support.write.support([wallets[0].account.address, 0, 1], {
+      value: await support.read.cost([0, 1]),
+      account: wallets[0].account,
+    });
+  });
+
+  it("Should allow new subscriber after increasing maxSlots past TierFull", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setMaxSlots([1, 1]);
+    const cost1 = await support.read.cost([1, 1]);
+
+    await support.write.support([wallets[0].account.address, 1, 1], { value: cost1, account: wallets[0].account });
+
+    await assert.rejects(
+      support.write.support([wallets[1].account.address, 1, 1], { value: cost1, account: wallets[1].account }),
+      /TierFull/,
+    );
+
+    await support.write.setMaxSlots([1, 2]);
+
+    await support.write.support([wallets[1].account.address, 1, 1], { value: cost1, account: wallets[1].account });
+    assert.equal((await support.read.tierHolders([1])).length, 2);
+  });
+
+  // --- Concurrent subscriptions after transfer ---
+
+  it("Should handle subscription lifecycle after transfer: Bob extends, Alice creates new", async function () {
+    const { support } = await deploy();
+
+    await support.write.support([walletClient.account.address, 2, 2], { value: await support.read.cost([2, 2]) });
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
+
     await support.write.transferFrom([walletClient.account.address, otherWallet.account.address, 1n]);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 0n);
+    assert.equal(await support.read.activeToken([otherWallet.account.address]), 1n);
 
-    // ownerOf changes, subscriberOf does not
-    assert.equal(await support.read.ownerOf([1n]), getAddress(otherWallet.account.address));
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+    // Bob extends the transferred token
+    const expiryBefore = await support.read.expiresAt([1n]);
+    await support.write.support([otherWallet.account.address, 2, 1], {
+      value: await support.read.cost([2, 1]),
+      account: otherWallet.account,
+    });
+    const expiryAfter = await support.read.expiresAt([1n]);
+    assert.equal(expiryAfter, expiryBefore + 30n * 24n * 60n * 60n);
+
+    // Alice creates a fresh subscription (token 2)
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 2n);
+    assert.equal(await support.read.totalSupply(), 2n);
+
+    // Both tokens independently active
+    const [tier1, active1] = await support.read.currentTier([1n]);
+    assert.equal(tier1, 2);
+    assert.equal(active1, true);
+
+    const [tier2, active2] = await support.read.currentTier([2n]);
+    assert.equal(tier2, 0);
+    assert.equal(active2, true);
+
+  });
+
+  // --- Free tier mass registration ---
+
+  it("Should allow mass registration at free tier (tierPrice = 0)", async function () {
+    const wallets = await viem.getWalletClients();
+    const { support } = await deploy();
+
+    await support.write.setTierPrice([0, 0n]);
+    assert.equal(await support.read.cost([0, 1]), 0n);
+
+    for (let i = 0; i < Math.min(wallets.length, 5); i++) {
+      await support.write.support([wallets[i].account.address, 0, 1], {
+        value: 0n,
+        account: wallets[i].account,
+      });
+    }
+
+    const count = Math.min(wallets.length, 5);
+    assert.equal(await support.read.totalSupply(), BigInt(count));
+
+    for (let i = 0; i < count; i++) {
+      const tokenId = await support.read.activeToken([wallets[i].account.address]);
+      assert.ok(tokenId > 0n);
+      const [tier, active] = await support.read.currentTier([tokenId]);
+      assert.equal(tier, 0);
+      assert.equal(active, true);
+    }
+  });
+
+  it("Should allow free tier extension and upgrade", async function () {
+    const { support } = await deploy();
+
+    await support.write.setTierPrice([0, 0n]);
+
+    await support.write.support([walletClient.account.address, 0, 3], { value: 0n });
+    const firstExpiry = await support.read.expiresAt([1n]);
+
+    await support.write.support([walletClient.account.address, 0, 3], { value: 0n });
+    const secondExpiry = await support.read.expiresAt([1n]);
+    assert.equal(secondExpiry, firstExpiry + 3n * 30n * 24n * 60n * 60n);
+
+    // Upgrade from free to paid tier
+    await support.write.support([walletClient.account.address, 2, 1], { value: parseEther("1") });
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 2);
+
+    const segs = await support.read.segments([1n]);
+    assert.equal(segs.length, 2);
   });
 });
 
@@ -1153,8 +1357,6 @@ describe("BaseSupport", async function () {
 
     assert.equal(await support.read.totalSupply(), 1n);
     assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
-
     const segs = await support.read.segments([1n]);
     assert.equal(segs.length, 1);
     assert.equal(segs[0].tier, 0);
@@ -1214,8 +1416,5 @@ describe("BaseSupport", async function () {
     assert.equal(await support.read.totalSupply(), 2n);
     assert.equal(await support.read.activeToken([walletClient.account.address]), 2n);
 
-    // Historical subscription preserved
-    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
-    assert.equal(await support.read.subscriberOf([2n]), getAddress(walletClient.account.address));
   });
 });
