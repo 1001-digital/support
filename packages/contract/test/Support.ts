@@ -348,21 +348,34 @@ describe("Support", async function () {
 
   it("Should reject non-owner calls", async function () {
     const { support } = await deploy();
-    await assert.rejects(support.write.setTierPrice([0, 1n], { account: otherWallet.account }), /0x30cd7471/);
-    await assert.rejects(support.write.withdraw({ account: otherWallet.account }), /NotOwner/);
+    await assert.rejects(support.write.setTierPrice([0, 1n], { account: otherWallet.account }), /OwnableUnauthorizedAccount/);
+    await assert.rejects(support.write.withdraw({ account: otherWallet.account }), /OwnableUnauthorizedAccount/);
   });
 
-  it("Should transfer ownership and reject zero address", async function () {
+  it("Should transfer ownership via two-step process", async function () {
     const { support } = await deploy();
-    await assert.rejects(
-      support.write.transferOwnership(["0x0000000000000000000000000000000000000000"]),
-      /InvalidOwner/,
-    );
+
+    // Step 1: propose new owner
     await support.write.transferOwnership([otherWallet.account.address]);
+    // Owner unchanged until accepted
+    assert.equal(await support.read.owner(), getAddress(walletClient.account.address));
+    assert.equal(await support.read.pendingOwner(), getAddress(otherWallet.account.address));
+
+    // Step 2: new owner accepts
+    await support.write.acceptOwnership({ account: otherWallet.account });
     assert.equal(await support.read.owner(), getAddress(otherWallet.account.address));
   });
 
-  // --- Soulbound NFT ---
+  it("Should reject acceptOwnership from non-pending address", async function () {
+    const { support } = await deploy();
+    await support.write.transferOwnership([otherWallet.account.address]);
+    await assert.rejects(
+      support.write.acceptOwnership({ account: walletClient.account }),
+      /OwnableUnauthorizedAccount/,
+    );
+  });
+
+  // --- NFT Transfer ---
 
   it("Should emit Transfer on mint, not on extension", async function () {
     const { support } = await deploy();
@@ -461,7 +474,7 @@ describe("Support", async function () {
         [walletClient.account.address, otherWallet.account.address, 1n],
         { account: otherWallet.account },
       ),
-      /NotApproved/,
+      /ERC721InsufficientApproval/,
     );
   });
 
@@ -625,7 +638,7 @@ describe("Support", async function () {
 
     await assert.rejects(
       support.write.grant([otherWallet.account.address, 0, 1], { account: otherWallet.account }),
-      /0x30cd7471/, // NotOwner()
+      /OwnableUnauthorizedAccount/,
     );
   });
 

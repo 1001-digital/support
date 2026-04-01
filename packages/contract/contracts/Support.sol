@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
+import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
+
 /**
 *        ·       ·   ·     ·
 *          ·   ·       · ·
@@ -16,12 +21,10 @@ pragma solidity ^0.8.28;
 *  @author ygg
 *  @notice A tiered support system on the world computer.
 */
-contract Support {
+contract Support is ERC721, Ownable2Step {
 
     // --- Errors ---
 
-    error NotOwner();
-    error InvalidOwner();
     error InvalidTier();
     error InvalidDuration();
     error InvalidRecipient();
@@ -32,10 +35,6 @@ contract Support {
     error NothingToWithdraw();
     error TierFull();
     error TierChangeForbidden();
-    error TokenDoesNotExist();
-    error NotTokenOwner();
-    error NotApproved();
-    error UnsafeRecipient();
     error UnsafeString();
 
     // --- Types ---
@@ -60,10 +59,6 @@ contract Support {
     event DiscountUpdated(uint16 minMonths, uint16 percentOff);
     event MaxSlotsUpdated(uint8 indexed tier, uint16 maxSlots);
     event Withdrawal(address indexed to, uint256 amount);
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
-    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
-    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
     event MetadataUpdate(uint256 tokenId);
     event PriceFeedUpdated(address priceFeed);
     event ProjectNameUpdated(string name);
@@ -72,7 +67,6 @@ contract Support {
 
     // --- State ---
 
-    address public owner;
     AggregatorV3Interface public priceFeed;
 
     // Project metadata
@@ -86,12 +80,8 @@ contract Support {
     uint16 public discountPercentOff;
     uint16[4] public maxSlots;
 
-    // ERC-721
+    // Token counter
     uint256 public totalSupply;
-    mapping(uint256 => address) internal _owners;
-    mapping(address => uint256) internal _balances;
-    mapping(uint256 => address) internal _tokenApprovals;
-    mapping(address => mapping(address => bool)) internal _operatorApprovals;
 
     // Subscriptions
     mapping(address => uint256) public activeToken;
@@ -103,13 +93,6 @@ contract Support {
     // Tier slots
     mapping(uint8 => address[]) internal _tierHolders;
 
-    // --- Modifiers ---
-
-    modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
-        _;
-    }
-
     // --- Constructor ---
 
     constructor(
@@ -120,10 +103,8 @@ contract Support {
         uint128[4] memory _tierPrices,
         uint16 _discountMinMonths,
         uint16 _discountPercentOff
-    ) {
+    ) ERC721("", "") Ownable(msg.sender) {
         if (_discountPercentOff > 100) revert InvalidDiscount();
-        owner = msg.sender;
-        emit OwnershipTransferred(address(0), msg.sender);
         projectName = _projectName;
         projectSymbol = _projectSymbol;
         logo = _logo;
@@ -131,6 +112,60 @@ contract Support {
         tierPrices = _tierPrices;
         discountMinMonths = _discountMinMonths;
         discountPercentOff = _discountPercentOff;
+    }
+
+    // --- ERC-721 Overrides ---
+
+    function name() public view override returns (string memory) {
+        return projectName;
+    }
+
+    function symbol() public view override returns (string memory) {
+        return projectSymbol;
+    }
+
+    function tokenURI(uint256 tokenId) public view override returns (string memory) {
+        _requireOwned(tokenId);
+
+        (uint8 tier, bool active) = _currentTier(tokenId);
+        uint8 displayTier = active ? tier : _lastTier(tokenId);
+
+        string memory svg = _buildSVG(tokenId, displayTier, active);
+
+        string memory json = string.concat(
+            '{"name":"', projectName, ' #', Strings.toString(tokenId),
+            '","image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)),
+            '","attributes":[', _attributes(tokenId, displayTier, active), ']}'
+        );
+
+        return string.concat("data:application/json;base64,", Base64.encode(bytes(json)));
+    }
+
+    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
+        return interfaceId == 0x49064906 // ERC-4906
+            || super.supportsInterface(interfaceId);
+    }
+
+    function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
+        address from = super._update(to, tokenId, auth);
+
+        // Subscription bookkeeping on transfer (not on mint)
+        if (from != address(0) && to != address(0)) {
+            if (activeToken[from] == tokenId) activeToken[from] = 0;
+
+            if (block.timestamp < expiresAt[tokenId]) {
+                uint256 existing = activeToken[to];
+                if (existing == 0 || block.timestamp >= expiresAt[existing]) {
+                    activeToken[to] = tokenId;
+                }
+            }
+        }
+
+        return from;
+    }
+
+    function renounceOwnership() public pure override {
+        revert();
     }
 
     // --- Public ---
@@ -144,7 +179,7 @@ contract Support {
         uint256 tokenId = activeToken[recipient];
         bool isActive = tokenId != 0 && block.timestamp < expiresAt[tokenId];
         if (isActive && tier != _lastTier(tokenId)
-            && msg.sender != recipient && msg.sender != owner) {
+            && msg.sender != recipient && msg.sender != owner()) {
             revert TierChangeForbidden();
         }
 
@@ -192,7 +227,7 @@ contract Support {
 
     /// @notice Update the Chainlink price feed address.
     function setPriceFeed(address _priceFeed) external onlyOwner {
-        if (_priceFeed == address(0)) revert InvalidOwner();
+        if (_priceFeed == address(0)) revert InvalidRecipient();
         priceFeed = AggregatorV3Interface(_priceFeed);
         emit PriceFeedUpdated(_priceFeed);
     }
@@ -243,134 +278,9 @@ contract Support {
     function withdraw() external onlyOwner {
         uint256 balance = address(this).balance;
         if (balance == 0) revert NothingToWithdraw();
-        (bool sent, ) = owner.call{value: balance}("");
+        (bool sent, ) = owner().call{value: balance}("");
         if (!sent) revert TransferFailed();
-        emit Withdrawal(owner, balance);
-    }
-
-    /// @notice Transfer contract ownership.
-    function transferOwnership(address newOwner) external onlyOwner {
-        if (newOwner == address(0)) revert InvalidOwner();
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
-    }
-
-    // --- ERC-721 ---
-
-    function name() external view returns (string memory) {
-        return projectName;
-    }
-
-    function symbol() external view returns (string memory) {
-        return projectSymbol;
-    }
-
-    function balanceOf(address _owner) external view returns (uint256) {
-        return _balances[_owner];
-    }
-
-    function ownerOf(uint256 tokenId) public view returns (address) {
-        address o = _owners[tokenId];
-        if (o == address(0)) revert TokenDoesNotExist();
-        return o;
-    }
-
-    function tokenURI(uint256 tokenId) external view returns (string memory) {
-        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
-
-        (uint8 tier, bool active) = _currentTier(tokenId);
-        uint8 displayTier = active ? tier : _lastTier(tokenId);
-
-        string memory svg = _buildSVG(tokenId, displayTier, active);
-
-        string memory json = string.concat(
-            '{"name":"', projectName, ' #', _toString(tokenId),
-            '","image":"data:image/svg+xml;base64,', _base64(bytes(svg)),
-            '","attributes":[', _attributes(tokenId, displayTier, active), ']}'
-        );
-
-        return string.concat("data:application/json;base64,", _base64(bytes(json)));
-    }
-
-    function approve(address to, uint256 tokenId) external {
-        address tokenOwner = ownerOf(tokenId);
-        if (msg.sender != tokenOwner && !_operatorApprovals[tokenOwner][msg.sender])
-            revert NotApproved();
-        _tokenApprovals[tokenId] = to;
-        emit Approval(tokenOwner, to, tokenId);
-    }
-
-    function setApprovalForAll(address operator, bool approved) external {
-        _operatorApprovals[msg.sender][operator] = approved;
-        emit ApprovalForAll(msg.sender, operator, approved);
-    }
-
-    function getApproved(uint256 tokenId) external view returns (address) {
-        if (_owners[tokenId] == address(0)) revert TokenDoesNotExist();
-        return _tokenApprovals[tokenId];
-    }
-
-    function isApprovedForAll(address _owner, address operator) external view returns (bool) {
-        return _operatorApprovals[_owner][operator];
-    }
-
-    function transferFrom(address from, address to, uint256 tokenId) public {
-        if (!_isApprovedOrOwner(msg.sender, tokenId)) revert NotApproved();
-        _transfer(from, to, tokenId);
-    }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId) external {
-        safeTransferFrom(from, to, tokenId, "");
-    }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory data) public {
-        transferFrom(from, to, tokenId);
-        if (to.code.length > 0) {
-            try IERC721Receiver(to).onERC721Received(msg.sender, from, tokenId, data) returns (bytes4 ret) {
-                if (ret != IERC721Receiver.onERC721Received.selector) revert UnsafeRecipient();
-            } catch {
-                revert UnsafeRecipient();
-            }
-        }
-    }
-
-    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
-        return interfaceId == 0x80ac58cd  // ERC-721
-            || interfaceId == 0x5b5e139f  // ERC-721 Metadata
-            || interfaceId == 0x49064906  // ERC-4906
-            || interfaceId == 0x01ffc9a7; // ERC-165
-    }
-
-    // --- Transfer ---
-
-    function _transfer(address from, address to, uint256 tokenId) internal {
-        if (_owners[tokenId] != from) revert NotTokenOwner();
-        if (to == address(0)) revert InvalidRecipient();
-
-        delete _tokenApprovals[tokenId];
-
-        --_balances[from];
-        ++_balances[to];
-        _owners[tokenId] = to;
-
-        if (activeToken[from] == tokenId) activeToken[from] = 0;
-
-        if (block.timestamp < expiresAt[tokenId]) {
-            uint256 existing = activeToken[to];
-            if (existing == 0 || block.timestamp >= expiresAt[existing]) {
-                activeToken[to] = tokenId;
-            }
-        }
-
-        emit Transfer(from, to, tokenId);
-    }
-
-    function _isApprovedOrOwner(address spender, uint256 tokenId) internal view returns (bool) {
-        address tokenOwner = _owners[tokenId];
-        if (tokenOwner == address(0)) revert TokenDoesNotExist();
-        return spender == tokenOwner
-            || _tokenApprovals[tokenId] == spender
-            || _operatorApprovals[tokenOwner][spender];
+        emit Withdrawal(owner(), balance);
     }
 
     // --- Subscription ---
@@ -430,12 +340,10 @@ contract Support {
     ) internal returns (uint256) {
         if (isNew) {
             tokenId = ++totalSupply;
-            _owners[tokenId] = recipient;
-            ++_balances[recipient];
+            _mint(recipient, tokenId);
             activeToken[recipient] = tokenId;
             startedAt[tokenId] = uint64(block.timestamp);
             _segments[tokenId].push(Segment(tier, uint64(block.timestamp)));
-            emit Transfer(address(0), recipient, tokenId);
         } else if (tier != _lastTier(tokenId)) {
             _segments[tokenId].push(Segment(tier, uint64(block.timestamp)));
         }
@@ -510,9 +418,9 @@ contract Support {
             '<text class="l" x="20" y="30">', projectName, ' SUPPORTERS</text>'
             '<text class="l" x="380" y="30" text-anchor="end">', _displayName(subscriberOf[tokenId]), '</text>',
             _badge(displayTier),
-            '<text class="l" x="20" y="380">DAY ', _toString(dayNum), '</text>'
+            '<text class="l" x="20" y="380">DAY ', Strings.toString(dayNum), '</text>'
             '<text class="l" x="200" y="380" text-anchor="middle">', active ? 'ACTIVE' : 'EXPIRED', '</text>'
-            '<text class="l" x="380" y="380" text-anchor="end">', _toString(dur), 'D</text>'
+            '<text class="l" x="380" y="380" text-anchor="end">', Strings.toString(dur), 'D</text>'
             '</svg>'
         );
     }
@@ -533,10 +441,10 @@ contract Support {
         uint256 textX = 26 + (w - 26) / 2; // center text in area right of logo
 
         return string.concat(
-            '<g transform="translate(', _toString(x), ',184)">',
-            '<rect width="', _toString(w), '" height="32" rx="3" fill="', bg, '"/>',
+            '<g transform="translate(', Strings.toString(x), ',184)">',
+            '<rect width="', Strings.toString(w), '" height="32" rx="3" fill="', bg, '"/>',
             '<g transform="translate(3,3)">', logo, '</g>',
-            '<text x="', _toString(textX), '" y="20" text-anchor="middle" font-family="monospace" font-size="12" font-weight="bold" fill="', tc, '">', t, '</text>',
+            '<text x="', Strings.toString(textX), '" y="20" text-anchor="middle" font-family="monospace" font-size="12" font-weight="bold" fill="', tc, '">', t, '</text>',
             '</g>'
         );
     }
@@ -544,9 +452,9 @@ contract Support {
     function _attributes(uint256 tokenId, uint8 displayTier, bool active) internal view returns (string memory) {
         string memory attrs = string.concat(
             '{"trait_type":"Status","value":"', active ? 'Active' : 'Expired', '"},',
-            '{"trait_type":"Tier","value":', _toString(displayTier), '},',
-            '{"trait_type":"Started At","display_type":"date","value":', _toString(uint256(startedAt[tokenId])), '},',
-            '{"trait_type":"Expires At","display_type":"date","value":', _toString(uint256(expiresAt[tokenId])), '}'
+            '{"trait_type":"Tier","value":', Strings.toString(displayTier), '},',
+            '{"trait_type":"Started At","display_type":"date","value":', Strings.toString(uint256(startedAt[tokenId])), '},',
+            '{"trait_type":"Expires At","display_type":"date","value":', Strings.toString(uint256(expiresAt[tokenId])), '}'
         );
 
         Segment[] storage segs = _segments[tokenId];
@@ -554,9 +462,9 @@ contract Support {
             uint64 segEnd = i + 1 < segs.length ? segs[i + 1].startedAt : expiresAt[tokenId];
             attrs = string.concat(
                 attrs,
-                ',{"trait_type":"Segment ', _toString(i + 1),
-                '","value":"Tier ', _toString(segs[i].tier),
-                ', ', _toString((segEnd - segs[i].startedAt) / 1 days), 'd"}'
+                ',{"trait_type":"Segment ', Strings.toString(i + 1),
+                '","value":"Tier ', Strings.toString(segs[i].tier),
+                ', ', Strings.toString((segEnd - segs[i].startedAt) / 1 days), 'd"}'
             );
         }
 
@@ -597,22 +505,6 @@ contract Support {
             bytes1 c = b[i];
             if (c == '"' || c == '<' || c == '>' || c == '\\') revert UnsafeString();
         }
-    }
-
-    // --- Utilities ---
-
-    function _toString(uint256 value) internal pure returns (string memory) {
-        if (value == 0) return "0";
-        uint256 temp = value;
-        uint256 digits;
-        while (temp != 0) { digits++; temp /= 10; }
-        bytes memory buffer = new bytes(digits);
-        while (value != 0) {
-            digits--;
-            buffer[digits] = bytes1(uint8(48 + value % 10));
-            value /= 10;
-        }
-        return string(buffer);
     }
 
     // --- ENS ---
@@ -672,42 +564,6 @@ contract Support {
         );
     }
 
-    bytes internal constant _B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-    function _base64(bytes memory data) internal pure returns (string memory) {
-        if (data.length == 0) return "";
-        uint256 encodedLen = 4 * ((data.length + 2) / 3);
-        bytes memory result = new bytes(encodedLen);
-        uint256 i;
-        uint256 j;
-
-        for (; i + 2 < data.length; i += 3) {
-            uint24 chunk = uint24(uint8(data[i])) << 16
-                | uint24(uint8(data[i + 1])) << 8
-                | uint24(uint8(data[i + 2]));
-            result[j++] = _B64[chunk >> 18 & 0x3F];
-            result[j++] = _B64[chunk >> 12 & 0x3F];
-            result[j++] = _B64[chunk >> 6 & 0x3F];
-            result[j++] = _B64[chunk & 0x3F];
-        }
-
-        if (data.length % 3 == 1) {
-            uint24 chunk = uint24(uint8(data[i])) << 16;
-            result[j++] = _B64[chunk >> 18 & 0x3F];
-            result[j++] = _B64[chunk >> 12 & 0x3F];
-            result[j++] = "=";
-            result[j++] = "=";
-        } else if (data.length % 3 == 2) {
-            uint24 chunk = uint24(uint8(data[i])) << 16
-                | uint24(uint8(data[i + 1])) << 8;
-            result[j++] = _B64[chunk >> 18 & 0x3F];
-            result[j++] = _B64[chunk >> 12 & 0x3F];
-            result[j++] = _B64[chunk >> 6 & 0x3F];
-            result[j++] = "=";
-        }
-
-        return string(result);
-    }
 }
 
 interface IENS {
@@ -716,11 +572,6 @@ interface IENS {
 
 interface IENSResolver {
     function name(bytes32 node) external view returns (string memory);
-}
-
-interface IERC721Receiver {
-    function onERC721Received(address operator, address from, uint256 tokenId, bytes calldata data)
-        external returns (bytes4);
 }
 
 interface AggregatorV3Interface {
