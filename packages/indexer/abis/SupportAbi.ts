@@ -88,6 +88,21 @@ export const SupportAbi = [
   },
   {
     type: "event",
+    name: "OwnershipTransferStarted",
+    inputs: [
+      { indexed: true, name: "previousOwner", type: "address" },
+      { indexed: true, name: "newOwner", type: "address" },
+    ],
+  },
+  {
+    type: "event",
+    name: "PriceFeedUpdated",
+    inputs: [
+      { indexed: false, name: "priceFeed", type: "address" },
+    ],
+  },
+  {
+    type: "event",
     name: "ProjectNameUpdated",
     inputs: [
       { indexed: false, name: "name", type: "string" },
@@ -171,6 +186,20 @@ export const SupportAbi = [
   {
     type: "function",
     name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "pendingOwner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "priceFeed",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "address" }],
@@ -307,7 +336,53 @@ export const SupportAbi = [
     outputs: [{ name: "", type: "bool" }],
   },
 
+  // --- ERC-721 (continued) ---
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "safeTransferFrom",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "tokenId", type: "uint256" },
+      { name: "data", type: "bytes" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "supportsInterface",
+    stateMutability: "view",
+    inputs: [{ name: "interfaceId", type: "bytes4" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+
   // --- Owner functions ---
+  {
+    type: "function",
+    name: "acceptOwnership",
+    stateMutability: "nonpayable",
+    inputs: [],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "setPriceFeed",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "_priceFeed", type: "address" }],
+    outputs: [],
+  },
   {
     type: "function",
     name: "setTierPrice",
