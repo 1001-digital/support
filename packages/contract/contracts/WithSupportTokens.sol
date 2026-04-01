@@ -4,8 +4,8 @@ pragma solidity ^0.8.28;
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {Support} from "./Support.sol";
-import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
-import {IGuardHook} from "./IGuardHook.sol";
+import {ISupportRenderer, Segment} from "./interfaces/ISupportRenderer.sol";
+import {IGuardHook} from "./interfaces/IGuardHook.sol";
 
 /// @title WithSupportTokens
 /// @notice Extension that represents support subscriptions as ERC-721 tokens.

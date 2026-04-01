@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IGuardHook} from "../IGuardHook.sol";
+import {IGuardHook} from "../interfaces/IGuardHook.sol";
 
 interface ISupportRead {
     function activeTokenOf(address supporter) external view returns (uint256);

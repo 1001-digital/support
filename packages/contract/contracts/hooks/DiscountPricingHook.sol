@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {IPricingHook} from "../IPricingHook.sol";
+import {IPricingHook} from "../interfaces/IPricingHook.sol";
 
 /// @title DiscountPricingHook
 /// @notice Applies a percentage discount when duration meets a minimum threshold.
