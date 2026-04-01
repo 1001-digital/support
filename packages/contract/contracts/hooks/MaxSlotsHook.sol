@@ -39,10 +39,10 @@ contract MaxSlotsHook is ISubscriptionHook, Ownable {
     function beforeSubscribe(
         uint8 tier, uint32 duration, uint256 baseUSD, address subscriber, bool, uint8
     ) external view override returns (Adjustments memory adj) {
+        if (!_canSubscribe(tier, subscriber)) revert SubscriptionBlocked();
         adj.adjustedUSD = baseUSD;
         adj.adjustedDuration = duration;
         adj.adjustedStart = 0;
-        adj.allowed = _canSubscribe(tier, subscriber);
     }
 
     function canSubscribe(uint8 tier, address subscriber) external view override returns (bool) {

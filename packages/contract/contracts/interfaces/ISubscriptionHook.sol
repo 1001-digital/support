@@ -2,12 +2,14 @@
 pragma solidity ^0.8.28;
 
 interface ISubscriptionHook {
+    /// @notice Revert with this to block a subscription in beforeSubscribe.
+    error SubscriptionBlocked();
+
     /// @notice Adjustments returned by beforeSubscribe.
     struct Adjustments {
         uint256 adjustedUSD;      // Final USD cost
         uint32  adjustedDuration; // Duration in months after adjustment
         uint64  adjustedStart;    // Start timestamp for new subs (0 = use block.timestamp)
-        bool    allowed;          // false = revert with SubscriptionBlocked()
     }
 
     /// @notice Called before a subscription is applied. Returns adjusted parameters.

@@ -26,7 +26,6 @@ contract DiscountHook is ISubscriptionHook, Ownable {
     ) external view override returns (Adjustments memory adj) {
         adj.adjustedDuration = duration;
         adj.adjustedStart = 0;
-        adj.allowed = true;
         if (duration >= minMonths && minMonths > 0) {
             adj.adjustedUSD = baseUSD * (100 - percentOff) / 100;
         } else {

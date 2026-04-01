@@ -728,14 +728,15 @@ describe("Support", async function () {
 
     await hook.write.setMaxSlots([3, 2]);
     const cost3 = await support.read.cost([3, 2]);
+    const cost3Single = await support.read.cost([3, 1]);
 
     // Fill both slots
     await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
 
-    // Full
+    // Full — cost() also reverts when tier is blocked, so use pre-computed price
     await assert.rejects(
-      support.write.support([wallets[2].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[2].account }),
+      support.write.support([wallets[2].account.address, 3, 1], { value: cost3Single, account: wallets[2].account }),
       /SubscriptionBlocked/,
     );
 
@@ -856,7 +857,7 @@ describe("Support", async function () {
   it("Should allow owner to grant free subscription", async function () {
     const { support, hook } = await deploy();
 
-    await support.write.grant([otherWallet.account.address, 3, 6]);
+    await support.write.grant([otherWallet.account.address, 3, 6, 0n]);
 
     assert.equal(await support.read.totalSupply(), 1n);
     assert.equal(await support.read.activeToken([otherWallet.account.address]), 1n);
@@ -870,10 +871,10 @@ describe("Support", async function () {
   it("Should allow owner to grant extension", async function () {
     const { support, hook } = await deploy();
 
-    await support.write.grant([otherWallet.account.address, 0, 1]);
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
     const firstExpiry = await support.read.expiresAt([1n]);
 
-    await support.write.grant([otherWallet.account.address, 0, 1]);
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
     const secondExpiry = await support.read.expiresAt([1n]);
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n);
@@ -884,9 +885,129 @@ describe("Support", async function () {
     const { support, hook } = await deploy();
 
     await assert.rejects(
-      support.write.grant([otherWallet.account.address, 0, 1], { account: otherWallet.account }),
+      support.write.grant([otherWallet.account.address, 0, 1, 0n], { account: otherWallet.account }),
       /OwnableUnauthorizedAccount/,
     );
+  });
+
+  // --- Grant: startAt ---
+
+  it("Should grant with future startAt", async function () {
+    const { support } = await deploy();
+    const block = await publicClient.getBlock();
+    const futureStart = block.timestamp + 86400n; // 1 day from now
+
+    await support.write.grant([otherWallet.account.address, 2, 3, futureStart]);
+
+    const tokenId = await support.read.activeToken([otherWallet.account.address]);
+    assert.equal(await support.read.startedAt([tokenId]), futureStart);
+
+    const segs = await support.read.segments([tokenId]);
+    assert.equal(segs[0].startedAt, futureStart);
+
+    // Expiry is based on future start + 3 months
+    const expires = await support.read.expiresAt([tokenId]);
+    assert.equal(expires, futureStart + 3n * 30n * 24n * 60n * 60n);
+  });
+
+  it("Should grant with past startAt (backdating)", async function () {
+    const { support } = await deploy();
+    const block = await publicClient.getBlock();
+    const pastStart = block.timestamp - 30n * 24n * 60n * 60n; // 1 month ago
+
+    await support.write.grant([otherWallet.account.address, 0, 3, pastStart]);
+
+    const tokenId = await support.read.activeToken([otherWallet.account.address]);
+    assert.equal(await support.read.startedAt([tokenId]), pastStart);
+
+    // Expiry is pastStart + 3 months = ~2 months from now
+    const expires = await support.read.expiresAt([tokenId]);
+    assert.equal(expires, pastStart + 3n * 30n * 24n * 60n * 60n);
+  });
+
+  it("Should ignore startAt on grant extension (not new)", async function () {
+    const { support } = await deploy();
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
+
+    const firstExpiry = await support.read.expiresAt([1n]);
+    const firstStart = await support.read.startedAt([1n]);
+
+    // Extend with a startAt — should be ignored, expiry extends from current
+    await support.write.grant([otherWallet.account.address, 0, 1, 9999999999n]);
+
+    assert.equal(await support.read.startedAt([1n]), firstStart); // unchanged
+    assert.equal(await support.read.expiresAt([1n]), firstExpiry + 30n * 24n * 60n * 60n);
+  });
+
+  // --- Grant vs hook ---
+
+  it("Should grant bypassing beforeSubscribe but still notifying hook", async function () {
+    const { support, hook } = await deploy();
+
+    await hook.write.setMaxSlots([2, 1]);
+    const cost2 = await support.read.cost([2, 1]);
+
+    // Fill the slot
+    await support.write.support([walletClient.account.address, 2, 1], { value: cost2 });
+
+    // support() is blocked by beforeSubscribe
+    await assert.rejects(
+      support.write.support([otherWallet.account.address, 2, 1], {
+        value: cost2,
+        account: otherWallet.account,
+      }),
+      /SubscriptionBlocked/,
+    );
+
+    // grant() skips beforeSubscribe but onSubscribe still tracks state — reverts if full
+    await assert.rejects(
+      support.write.grant([otherWallet.account.address, 2, 1, 0n]),
+      /TierFull/,
+    );
+
+    // Owner increases capacity, then grant works
+    await hook.write.setMaxSlots([2, 2]);
+    await support.write.grant([otherWallet.account.address, 2, 1, 0n]);
+    assert.equal(await support.read.totalSupply(), 2n);
+
+    const [tier, active] = await support.read.currentTier([2n]);
+    assert.equal(tier, 2);
+    assert.equal(active, true);
+  });
+
+  // --- Grant tier change ---
+
+  it("Should grant tier change without price conversion", async function () {
+    const { support } = await deploy();
+
+    // Grant tier 2 ($25/mo) for 2 months
+    await support.write.grant([otherWallet.account.address, 2, 2, 0n]);
+    const expiryBefore = await support.read.expiresAt([1n]);
+
+    // Grant tier change to tier 0 ($5/mo) with 1 month — should NOT convert remaining time
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
+    const expiryAfter = await support.read.expiresAt([1n]);
+
+    // Expiry is simply old expiry + 1 month (no 5x conversion like support() does)
+    assert.equal(expiryAfter, expiryBefore + 30n * 24n * 60n * 60n);
+
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 0);
+  });
+
+  it("Should grant tier change with duration 0", async function () {
+    const { support } = await deploy();
+
+    await support.write.grant([otherWallet.account.address, 0, 2, 0n]);
+    const expiryBefore = await support.read.expiresAt([1n]);
+
+    // Change tier only, no extension
+    await support.write.grant([otherWallet.account.address, 2, 0, 0n]);
+    const expiryAfter = await support.read.expiresAt([1n]);
+
+    assert.equal(expiryAfter, expiryBefore); // unchanged
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 2);
   });
 
   // --- Gifting ---
@@ -970,7 +1091,7 @@ describe("Support", async function () {
     await priceFeed.write.setStale();
 
     // Grant should work (skips oracle)
-    await support.write.grant([otherWallet.account.address, 2, 3]);
+    await support.write.grant([otherWallet.account.address, 2, 3, 0n]);
 
     const [tier, active] = await support.read.currentTier([1n]);
     assert.equal(tier, 2);
@@ -1041,7 +1162,7 @@ describe("Support", async function () {
   it("Should allow grant() before sale starts", async function () {
     const { support } = await deployWithFutureSale();
 
-    await support.write.grant([otherWallet.account.address, 2, 3]);
+    await support.write.grant([otherWallet.account.address, 2, 3, 0n]);
     assert.equal(await support.read.totalSupply(), 1n);
   });
 
@@ -1136,7 +1257,7 @@ describe("Support", async function () {
     const { support, hook } = await deploy();
     const maxDuration = 2 ** 32 - 1; // type(uint32).max = 4294967295
 
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
 
     const tokenId = await support.read.activeToken([otherWallet.account.address]);
     assert.equal(tokenId, 1n);
@@ -1163,9 +1284,9 @@ describe("Support", async function () {
     const { support, hook } = await deploy();
     const maxDuration = 2 ** 32 - 1;
 
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
 
     const tokenId = await support.read.activeToken([otherWallet.account.address]);
     const expires = await support.read.expiresAt([tokenId]);
@@ -1183,12 +1304,12 @@ describe("Support", async function () {
   it("Should handle many tier switches and render tokenURI", async function () {
     const { support, hook } = await deploy();
 
-    await support.write.grant([walletClient.account.address, 0, 12]);
+    await support.write.grant([walletClient.account.address, 0, 12, 0n]);
 
     // Switch tiers via grant (avoids compounding cost from time conversion)
     const switches = [1, 2, 3, 2, 1, 0, 3] as const;
     for (const tier of switches) {
-      await support.write.grant([walletClient.account.address, tier, 1]);
+      await support.write.grant([walletClient.account.address, tier, 1, 0n]);
     }
 
     const segs = await support.read.segments([1n]);
@@ -1211,6 +1332,7 @@ describe("Support", async function () {
 
     await hook.write.setMaxSlots([0, 3]);
     const cost0 = await support.read.cost([0, 2]);
+    const cost0Single = await support.read.cost([0, 1]);
 
     await support.write.support([wallets[0].account.address, 0, 2], { value: cost0, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 0, 2], { value: cost0, account: wallets[1].account });
@@ -1222,14 +1344,14 @@ describe("Support", async function () {
 
     await assert.rejects(
       support.write.support([wallets[3].account.address, 0, 1], {
-        value: await support.read.cost([0, 1]),
+        value: cost0Single,
         account: wallets[3].account,
       }),
       /SubscriptionBlocked/,
     );
 
     await support.write.support([wallets[0].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: cost0Single,
       account: wallets[0].account,
     });
   });
@@ -1316,10 +1438,10 @@ describe("Support", async function () {
     assert.equal(active.length, 1);
     assert.equal(active[0], getAddress(wallets[1].account.address));
 
-    // Charlie cannot subscribe — tier is full
+    // Charlie cannot subscribe — tier is full (cost() also reverts when blocked)
     await assert.rejects(
       support.write.support([wallets[2].account.address, 2, 1], {
-        value: await support.read.cost([2, 1]),
+        value: cost2,
         account: wallets[2].account,
       }),
       /SubscriptionBlocked/,
@@ -1508,6 +1630,7 @@ describe("Support", async function () {
     const { support, priceFeed, hook } = await deploy();
 
     await hook.write.setMaxSlots([2, 1]);
+    const cost2 = await support.read.cost([2, 1]);
 
     await support.write.support([wallets[0].account.address, 0, 1], {
       value: await support.read.cost([0, 1]),
@@ -1528,7 +1651,7 @@ describe("Support", async function () {
 
     await assert.rejects(
       support.write.support([wallets[2].account.address, 2, 1], {
-        value: await support.read.cost([2, 1]),
+        value: cost2,
         account: wallets[2].account,
       }),
       /SubscriptionBlocked/,

@@ -33,7 +33,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     error TransferFailed();
     error NothingToWithdraw();
     error TierChangeForbidden();
-    error SubscriptionBlocked();
 
     // --- Events ---
 
@@ -112,17 +111,45 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ///      recipient (or owner) may change tiers.
     function support(address recipient, uint8 tier, uint32 duration) external payable afterSaleStart {
         if (recipient == address(0)) revert InvalidRecipient();
+        if (tier >= 4) revert InvalidTier();
 
-        uint256 tokenId = _activeTokenOf(recipient);
-        bool isActive = tokenId != 0;
-        if (isActive && tier != _lastTier(tokenId)
+        (uint256 tokenId, bool isNew, uint8 previousTier) = _resolveSubscription(recipient);
+
+        if (!isNew && tier != previousTier
             && msg.sender != recipient && msg.sender != owner()) {
             revert TierChangeForbidden();
         }
 
-        uint256 required = _subscribe(recipient, tier, duration, false);
+        // New subscriptions require duration >= 1. Active tier changes allow 0.
+        if (duration == 0 && (isNew || tier == previousTier)) revert InvalidDuration();
+
+        // --- Hook: before ---
+        ISubscriptionHook h = hook;
+        ISubscriptionHook.Adjustments memory adj = _beforeSubscribe(
+            h, tier, duration, recipient, isNew, previousTier
+        );
+
+        uint256 required;
+        uint64 newExpiry;
+        uint64 start = uint64(block.timestamp);
+
+        if (isNew) {
+            required = _baseCost(adj.adjustedUSD);
+            if (adj.adjustedStart != 0) start = adj.adjustedStart;
+            newExpiry = _addDuration(start, adj.adjustedDuration);
+        } else if (tier == previousTier) {
+            required = _baseCost(adj.adjustedUSD);
+            newExpiry = _addDuration(expiresAt[tokenId], adj.adjustedDuration);
+        } else {
+            (required, newExpiry) = _changeTier(expiresAt[tokenId], previousTier, tier, adj);
+        }
 
         if (msg.value < required) revert InsufficientPayment();
+
+        tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry, start);
+        _notifyHook(h, previousTier, tier, recipient);
+        _afterSubscriptionChange(tokenId);
+        emit Supported(recipient, tier, tokenId, duration, required, newExpiry);
 
         uint256 excess = msg.value - required;
         if (excess > 0) {
@@ -132,9 +159,22 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     /// @notice Grant a free subscription (owner only).
-    function grant(address recipient, uint8 tier, uint32 duration) external onlyOwner {
+    function grant(address recipient, uint8 tier, uint32 duration, uint64 startAt) external onlyOwner {
         if (recipient == address(0)) revert InvalidRecipient();
-        _subscribe(recipient, tier, duration, true);
+        if (tier >= 4) revert InvalidTier();
+
+        (uint256 tokenId, bool isNew, uint8 previousTier) = _resolveSubscription(recipient);
+
+        if (isNew && duration == 0) revert InvalidDuration();
+
+        uint64 start = startAt != 0 ? startAt : uint64(block.timestamp);
+        uint64 base = isNew ? start : expiresAt[tokenId];
+        uint64 newExpiry = _addDuration(base, duration);
+
+        tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry, start);
+        _notifyHook(hook, previousTier, tier, recipient);
+        _afterSubscriptionChange(tokenId);
+        emit Supported(recipient, tier, tokenId, duration, 0, newExpiry);
     }
 
     /// @notice Get the base ETH cost for a tier and duration (new subscription).
@@ -217,76 +257,43 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     /// @dev Called after any subscription change. Override to add side effects (e.g. metadata update events).
     function _afterSubscriptionChange(uint256 tokenId) internal virtual {}
 
-    // --- Subscription ---
+    // --- Subscription Internals ---
 
-    function _subscribe(
-        address recipient, uint8 tier, uint32 duration, bool free
-    ) internal returns (uint256 required) {
-        if (tier >= 4) revert InvalidTier();
-
-        uint256 previousTokenId = activeToken[recipient];
-        uint256 tokenId = _syncActiveToken(recipient);
-        bool isNew = tokenId == 0;
-
+    /// @dev Resolve the subscriber's current token, syncing expired pointers.
+    ///      Returns the previous tier even for expired tokens so hooks can clean up.
+    function _resolveSubscription(address subscriber) internal returns (uint256 tokenId, bool isNew, uint8 previousTier) {
+        uint256 previousTokenId = activeToken[subscriber];
+        tokenId = _syncActiveToken(subscriber);
+        isNew = tokenId == 0;
         if (tokenId != 0) previousTokenId = tokenId;
-        uint8 previousTier = previousTokenId != 0 ? _lastTier(previousTokenId) : type(uint8).max;
+        previousTier = previousTokenId != 0 ? _lastTier(previousTokenId) : type(uint8).max;
+    }
 
-        // New subscriptions require duration >= 1. Active tier changes allow 0.
-        if (duration == 0 && (isNew || tier == previousTier)) revert InvalidDuration();
-
-        // --- Hook: before ---
-        ISubscriptionHook h = hook;
-        ISubscriptionHook.Adjustments memory adj = _beforeSubscribe(
-            h, tier, duration, recipient, isNew, previousTier
-        );
-        if (!adj.allowed) revert SubscriptionBlocked();
-
-        uint64 newExpiry;
-        uint64 start = uint64(block.timestamp);
-
-        if (isNew) {
-            if (!free) required = _baseCost(adj.adjustedUSD);
-            if (adj.adjustedStart != 0) start = adj.adjustedStart;
-            newExpiry = _addDuration(start, adj.adjustedDuration);
-        } else if (tier == previousTier) {
-            if (!free) required = _baseCost(adj.adjustedUSD);
-            newExpiry = _addDuration(expiresAt[tokenId], adj.adjustedDuration);
-        } else {
-            (required, newExpiry) = _changeTier(expiresAt[tokenId], previousTier, tier, free, adj);
+    /// @dev Notify the hook of a tier change.
+    function _notifyHook(ISubscriptionHook h, uint8 previousTier, uint8 tier, address recipient) internal {
+        if (address(h) == address(0)) return;
+        if (previousTier != type(uint8).max && previousTier != tier) {
+            h.onRelease(previousTier, recipient);
         }
-
-        tokenId = _applySubscription(recipient, tokenId, isNew, tier, newExpiry, start);
-
-        // --- Hook: after ---
-        if (address(h) != address(0)) {
-            if (previousTier != type(uint8).max && previousTier != tier) {
-                h.onRelease(previousTier, recipient);
-            }
-            h.onSubscribe(tier, recipient);
-        }
-
-        _afterSubscriptionChange(tokenId);
-        emit Supported(recipient, tier, tokenId, duration, required, newExpiry);
+        h.onSubscribe(tier, recipient);
     }
 
     function _changeTier(
         uint64 currentExpiry, uint8 fromTier, uint8 toTier,
-        bool free, ISubscriptionHook.Adjustments memory adj
+        ISubscriptionHook.Adjustments memory adj
     ) private view returns (uint256 required, uint64 newExpiry) {
         uint64 remaining = currentExpiry - uint64(block.timestamp);
         uint128 oldPrice = tierPrices[fromTier];
         uint128 newPrice = tierPrices[toTier];
 
         if (newPrice > oldPrice) {
-            if (!free) {
-                uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-                required = _usdToEth(diffUSD + adj.adjustedUSD);
-            }
+            uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
+            required = _usdToEth(diffUSD + adj.adjustedUSD);
             newExpiry = _addDuration(currentExpiry, adj.adjustedDuration);
             return (required, newExpiry);
         }
 
-        if (!free) required = _baseCost(adj.adjustedUSD);
+        required = _baseCost(adj.adjustedUSD);
         uint256 converted = newPrice == 0
             ? uint256(remaining)
             : uint256(remaining) * oldPrice / newPrice;
@@ -351,7 +358,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ) internal view returns (ISubscriptionHook.Adjustments memory adj) {
         uint256 baseUSD = uint256(tierPrices[tier]) * duration;
         if (address(h) == address(0)) {
-            return ISubscriptionHook.Adjustments(baseUSD, duration, 0, true);
+            return ISubscriptionHook.Adjustments(baseUSD, duration, 0);
         }
         adj = h.beforeSubscribe(tier, duration, baseUSD, subscriber, isNew, previousTier);
     }
