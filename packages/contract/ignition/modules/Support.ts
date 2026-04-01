@@ -6,8 +6,6 @@ export default buildModule("SupportModule", (m) => {
   const logo = m.getParameter("logo");
   const priceFeed = m.getParameter("priceFeed");
   const tierPrices = m.getParameter("tierPrices");
-  const discountMinMonths = m.getParameter("discountMinMonths");
-  const discountPercentOff = m.getParameter("discountPercentOff");
   const saleStart = m.getParameter("saleStart");
 
   const renderer = m.contract("SupportRenderer", []);
@@ -15,13 +13,11 @@ export default buildModule("SupportModule", (m) => {
   const support = m.contract("SupportToken", [
     projectName,
     projectSymbol,
-    logo,
     priceFeed,
     tierPrices,
-    discountMinMonths,
-    discountPercentOff,
-    renderer,
     saleStart,
+    logo,
+    renderer,
   ]);
 
   return { support, renderer };

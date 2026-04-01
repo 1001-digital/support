@@ -56,18 +56,9 @@ export const SupportAbi = [
   },
   {
     type: "event",
-    name: "DiscountUpdated",
+    name: "HookUpdated",
     inputs: [
-      { indexed: false, name: "minMonths", type: "uint16" },
-      { indexed: false, name: "percentOff", type: "uint16" },
-    ],
-  },
-  {
-    type: "event",
-    name: "MaxSlotsUpdated",
-    inputs: [
-      { indexed: true, name: "tier", type: "uint8" },
-      { indexed: false, name: "maxSlots", type: "uint16" },
+      { indexed: false, name: "hook", type: "address" },
     ],
   },
   {
@@ -120,6 +111,13 @@ export const SupportAbi = [
     name: "LogoUpdated",
     inputs: [],
   },
+  {
+    type: "event",
+    name: "RendererUpdated",
+    inputs: [
+      { indexed: false, name: "renderer", type: "address" },
+    ],
+  },
 
   // --- Public functions ---
   {
@@ -141,6 +139,7 @@ export const SupportAbi = [
       { name: "recipient", type: "address" },
       { name: "tier", type: "uint8" },
       { name: "duration", type: "uint32" },
+      { name: "startAt", type: "uint64" },
     ],
     outputs: [],
   },
@@ -153,6 +152,19 @@ export const SupportAbi = [
       { name: "duration", type: "uint32" },
     ],
     outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "estimate",
+    stateMutability: "view",
+    inputs: [
+      { name: "tier", type: "uint8" },
+      { name: "duration", type: "uint32" },
+    ],
+    outputs: [
+      { name: "ethCost", type: "uint256" },
+      { name: "adjustedDuration", type: "uint32" },
+    ],
   },
   {
     type: "function",
@@ -176,10 +188,10 @@ export const SupportAbi = [
   },
   {
     type: "function",
-    name: "tierHolders",
+    name: "activeTokenOf",
     stateMutability: "view",
-    inputs: [{ name: "tier", type: "uint8" }],
-    outputs: [{ name: "", type: "address[]" }],
+    inputs: [{ name: "supporter", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
   },
 
   // --- State getters ---
@@ -200,6 +212,13 @@ export const SupportAbi = [
   {
     type: "function",
     name: "priceFeed",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "hook",
     stateMutability: "view",
     inputs: [],
     outputs: [{ name: "", type: "address" }],
@@ -227,27 +246,6 @@ export const SupportAbi = [
   },
   {
     type: "function",
-    name: "discountMinMonths",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint16" }],
-  },
-  {
-    type: "function",
-    name: "discountPercentOff",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint16" }],
-  },
-  {
-    type: "function",
-    name: "maxSlots",
-    stateMutability: "view",
-    inputs: [{ name: "", type: "uint256" }],
-    outputs: [{ name: "", type: "uint16" }],
-  },
-  {
-    type: "function",
     name: "activeToken",
     stateMutability: "view",
     inputs: [{ name: "", type: "address" }],
@@ -266,6 +264,20 @@ export const SupportAbi = [
     stateMutability: "view",
     inputs: [{ name: "", type: "uint256" }],
     outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "logo",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "function",
+    name: "renderer",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
   },
 
   // --- ERC-721 ---
@@ -313,6 +325,23 @@ export const SupportAbi = [
   },
   {
     type: "function",
+    name: "tokenOfOwnerByIndex",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "index", type: "uint256" },
+    ],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "tokenByIndex",
+    stateMutability: "view",
+    inputs: [{ name: "index", type: "uint256" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "getApproved",
     stateMutability: "view",
     inputs: [{ name: "tokenId", type: "uint256" }],
@@ -328,8 +357,6 @@ export const SupportAbi = [
     ],
     outputs: [{ name: "", type: "bool" }],
   },
-
-  // --- ERC-721 (continued) ---
   {
     type: "function",
     name: "safeTransferFrom",
@@ -388,22 +415,9 @@ export const SupportAbi = [
   },
   {
     type: "function",
-    name: "setDiscount",
+    name: "setHook",
     stateMutability: "nonpayable",
-    inputs: [
-      { name: "minMonths", type: "uint16" },
-      { name: "percentOff", type: "uint16" },
-    ],
-    outputs: [],
-  },
-  {
-    type: "function",
-    name: "setMaxSlots",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "tier", type: "uint8" },
-      { name: "max", type: "uint16" },
-    ],
+    inputs: [{ name: "_hook", type: "address" }],
     outputs: [],
   },
   {
@@ -425,6 +439,13 @@ export const SupportAbi = [
     name: "setLogo",
     stateMutability: "nonpayable",
     inputs: [{ name: "_logo", type: "string" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "setRenderer",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "_renderer", type: "address" }],
     outputs: [],
   },
   {

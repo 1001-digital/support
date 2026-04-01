@@ -3,8 +3,9 @@ pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
-import {Support} from "./Support.sol";
-import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
+import {Support} from "../Support.sol";
+import {ISupportRenderer, Segment} from "../interfaces/ISupportRenderer.sol";
+import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 /// @title WithSupportTokens
 /// @notice Extension that represents support subscriptions as ERC-721 tokens.
@@ -84,7 +85,15 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
         _receiveActiveToken(to, tokenId);
 
         if (wasActive) {
-            _migrateTierHolder(tier, from, to);
+            ISubscriptionHook h = hook;
+            if (address(h) != address(0)) {
+                if (!_hasActiveTierToken(from, tier)) {
+                    h.onRelease(tier, from);
+                }
+                if (_hasActiveTierToken(to, tier)) {
+                    h.onSubscribe(tier, to);
+                }
+            }
         }
 
         return from;
@@ -124,18 +133,6 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
         }
 
         activeToken[to] = tokenId;
-    }
-
-    /// @dev Migrate tier-holder tracking when an active token is transferred.
-    ///      Must be called after _transferActiveToken / _receiveActiveToken.
-    function _migrateTierHolder(uint8 tier, address from, address to) private {
-        if (!_hasActiveTierToken(from, tier)) {
-            _removeFromTier(tier, from);
-        }
-
-        if (_hasActiveTierToken(to, tier)) {
-            _addToTier(tier, to);
-        }
     }
 
     // --- Hook Overrides ---

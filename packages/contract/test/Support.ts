@@ -28,33 +28,38 @@ describe("Support", async function () {
     const support = await viem.deployContract("SupportToken", [
       "TestProject",
       "TEST",
-      '<path d="M0 0"/>',
       priceFeed.address,
       tierPrices,
-      discountMinMonths,
-      discountPercentOff,
-      renderer.address,
       0n,
+      '<path d="M0 0"/>',
+      renderer.address,
     ]);
-    return { support, priceFeed, renderer };
+
+    const discountHook = await viem.deployContract("DiscountHook", [discountMinMonths, discountPercentOff]);
+
+    const hook = await viem.deployContract("MaxSlotsHook", [support.address]);
+    await support.write.setHook([hook.address]);
+
+    return { support, priceFeed, renderer, discountHook, hook };
   }
 
   // --- Cost ---
 
   it("Should calculate base cost", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     assert.equal(await support.read.cost([0, 1]), parseEther("0.0025"));
     assert.equal(await support.read.cost([3, 1]), parseEther("0.025"));
   });
 
   it("Should apply discount at 12+ months", async function () {
-    const { support } = await deploy();
+    const { support, discountHook } = await deploy();
+    await support.write.setHook([discountHook.address]);
     // $5 * 12 = $60, 20% off = $48 / $2000 = 0.024 ETH
     assert.equal(await support.read.cost([0, 12]), parseEther("0.024"));
   });
 
   it("Should revert cost for invalid inputs", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await assert.rejects(support.read.cost([4, 1]), /InvalidTier/);
     await assert.rejects(support.read.cost([0, 0]), /InvalidDuration/);
   });
@@ -62,7 +67,7 @@ describe("Support", async function () {
   // --- New subscription ---
 
   it("Should mint NFT on first support", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([0, 1]);
 
     await support.write.support([walletClient.account.address, 0, 1], { value: ethCost });
@@ -79,7 +84,7 @@ describe("Support", async function () {
   // --- Same-tier extension ---
 
   it("Should extend same tier without new segment", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([0, 1]);
 
     await support.write.support([walletClient.account.address, 0, 1], { value: ethCost });
@@ -97,7 +102,7 @@ describe("Support", async function () {
   // --- Upgrade ---
 
   it("Should upgrade immediately and charge difference", async function () {
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
     // Subscribe tier 0 ($5/mo) for 2 months
     await support.write.support([walletClient.account.address, 0, 2], { value: await support.read.cost([0, 2]) });
@@ -146,7 +151,7 @@ describe("Support", async function () {
   });
 
   it("Should upgrade with duration 0 (just pay diff)", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 2], { value: await support.read.cost([0, 2]) });
     const expiryBefore = await support.read.expiresAt([1n]);
@@ -162,7 +167,7 @@ describe("Support", async function () {
   });
 
   it("Should downgrade with duration 0 (just convert time)", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 2, 1], { value: await support.read.cost([2, 1]) });
     const expiryBefore = await support.read.expiresAt([1n]);
@@ -178,7 +183,7 @@ describe("Support", async function () {
   });
 
   it("Should revert duration 0 for new subscription", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await assert.rejects(
       support.write.support([walletClient.account.address, 0, 0], { value: 0n }),
       /InvalidDuration/,
@@ -186,7 +191,7 @@ describe("Support", async function () {
   });
 
   it("Should revert duration 0 for same-tier extension", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
     await assert.rejects(
@@ -198,7 +203,7 @@ describe("Support", async function () {
   // --- Downgrade ---
 
   it("Should downgrade immediately and extend duration", async function () {
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
     // Subscribe tier 2 ($25/mo) for 1 month
     await support.write.support([walletClient.account.address, 2, 1], { value: await support.read.cost([2, 1]) });
@@ -233,7 +238,7 @@ describe("Support", async function () {
   });
 
   it("Should handle downgrade to free tier", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.setTierPrice([0, 0n]); // tier 0 = free
 
@@ -253,7 +258,7 @@ describe("Support", async function () {
   // --- Subscription expiry + new NFT ---
 
   it("Should mint new NFT after expiry", async function () {
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
@@ -272,7 +277,7 @@ describe("Support", async function () {
   });
 
   it("Should return inactive for expired token", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
@@ -286,7 +291,7 @@ describe("Support", async function () {
   // --- Refund ---
 
   it("Should refund excess and emit correct paid", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([0, 1]);
     const overpay = ethCost + parseEther("0.5");
 
@@ -300,14 +305,14 @@ describe("Support", async function () {
   });
 
   it("Should revert on insufficient payment", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await assert.rejects(support.write.support([walletClient.account.address, 0, 1], { value: 1n }), /InsufficientPayment/);
   });
 
   // --- Oracle ---
 
   it("Should revert on stale/zero/bad-round price", async function () {
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
     await priceFeed.write.setPrice([0n]);
     await assert.rejects(support.read.cost([0, 1]), /StalePrice/);
@@ -320,24 +325,23 @@ describe("Support", async function () {
   // --- Owner ---
 
   it("Should allow owner functions", async function () {
-    const { support } = await deploy();
+    const { support, discountHook, hook } = await deploy();
 
     await support.write.setTierPrice([0, 750000000n]);
     assert.equal(await support.read.tierPrices([0]), 750000000n);
 
-    await support.write.setDiscount([6, 10]);
-    assert.equal(await support.read.discountMinMonths(), 6);
+    await discountHook.write.setDiscount([6, 10]);
+    assert.equal(await discountHook.read.minMonths(), 6);
 
     await support.write.setLogo(['<path d="M0 0"/>']);
     assert.equal(await support.read.logo(), '<path d="M0 0"/>');
 
-
-    await support.write.setMaxSlots([3, 5]);
-    assert.equal(await support.read.maxSlots([3]), 5);
+    await hook.write.setMaxSlots([3, 5]);
+    assert.equal(await hook.read.maxSlots([3]), 5);
   });
 
   it("Should allow withdraw", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([0, 1]);
     await support.write.support([walletClient.account.address, 0, 1], { value: ethCost });
 
@@ -351,13 +355,13 @@ describe("Support", async function () {
   });
 
   it("Should reject non-owner calls", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await assert.rejects(support.write.setTierPrice([0, 1n], { account: otherWallet.account }), /OwnableUnauthorizedAccount/);
     await assert.rejects(support.write.withdraw({ account: otherWallet.account }), /OwnableUnauthorizedAccount/);
   });
 
   it("Should transfer ownership via two-step process", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // Step 1: propose new owner
     await support.write.transferOwnership([otherWallet.account.address]);
@@ -371,7 +375,7 @@ describe("Support", async function () {
   });
 
   it("Should reject acceptOwnership from non-pending address", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.transferOwnership([otherWallet.account.address]);
     await assert.rejects(
       support.write.acceptOwnership({ account: walletClient.account }),
@@ -382,7 +386,7 @@ describe("Support", async function () {
   // --- NFT Transfer ---
 
   it("Should emit Transfer on mint, not on extension", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([0, 1]);
 
     const hash1 = await support.write.support([walletClient.account.address, 0, 1], { value: ethCost });
@@ -403,7 +407,7 @@ describe("Support", async function () {
   });
 
   it("Should transfer NFT and subscription", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.support([walletClient.account.address, 2, 3], { value: await support.read.cost([2, 3]) });
 
     await support.write.transferFrom([walletClient.account.address, otherWallet.account.address, 1n]);
@@ -422,7 +426,7 @@ describe("Support", async function () {
   });
 
   it("Should allow approved transfer", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
     await support.write.approve([otherWallet.account.address, 1n]);
@@ -435,7 +439,7 @@ describe("Support", async function () {
   });
 
   it("Should not overwrite receiver's active subscription on transfer", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // Both wallets subscribe
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
@@ -456,7 +460,7 @@ describe("Support", async function () {
   });
 
   it("Should set receiver's activeToken if they have no active subscription", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
@@ -470,7 +474,7 @@ describe("Support", async function () {
   });
 
   it("Should not set activeToken when transferring expired NFT", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
@@ -487,7 +491,7 @@ describe("Support", async function () {
   });
 
   it("Should promote another active token when activeToken is transferred", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // Alice subscribes (token 1)
     await support.write.support([walletClient.account.address, 0, 3], { value: await support.read.cost([0, 3]) });
@@ -518,7 +522,7 @@ describe("Support", async function () {
   });
 
   it("Should revert unauthorized transfer", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
     await assert.rejects(
@@ -531,7 +535,7 @@ describe("Support", async function () {
   });
 
   it("Should support ERC-165/721/4906 interfaces", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     assert.equal(await support.read.supportsInterface(["0x01ffc9a7"]), true);
     assert.equal(await support.read.supportsInterface(["0x80ac58cd"]), true);
     assert.equal(await support.read.supportsInterface(["0x5b5e139f"]), true);
@@ -542,7 +546,7 @@ describe("Support", async function () {
   // --- tokenURI ---
 
   it("Should build active tokenURI with project name and badge", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
     const uri = await support.read.tokenURI([1n]);
@@ -562,7 +566,7 @@ describe("Support", async function () {
   });
 
   it("Should build expired tokenURI with last tier badge", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
     await support.write.support([walletClient.account.address, 2, 1], { value: parseEther("1") });
@@ -586,9 +590,9 @@ describe("Support", async function () {
 
   it("Should enforce and free tier slots", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 1]);
+    await hook.write.setMaxSlots([3, 1]);
 
     const cost3 = await support.read.cost([3, 1]);
     await support.write.support([wallets[0].account.address, 3, 1], { value: cost3, account: wallets[0].account });
@@ -596,22 +600,22 @@ describe("Support", async function () {
     // Slot full
     await assert.rejects(
       support.write.support([wallets[1].account.address, 3, 1], { value: cost3, account: wallets[1].account }),
-      /TierFull/,
+      /SubscriptionBlocked/,
     );
 
     // Holder downgrades — frees slot
     await support.write.support([wallets[0].account.address, 0, 1], { value: parseEther("1"), account: wallets[0].account });
 
     await support.write.support([wallets[1].account.address, 3, 1], { value: cost3, account: wallets[1].account });
-    const holders = await support.read.tierHolders([3]);
+    const holders = await hook.read.tierHolders([3]);
     assert.equal(holders[0], getAddress(wallets[1].account.address));
   });
 
   it("Should free slot on expiry", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 1]);
+    await hook.write.setMaxSlots([3, 1]);
     await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
 
     await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
@@ -619,7 +623,7 @@ describe("Support", async function () {
     await priceFeed.write.setPrice([ETH_USD]);
 
     await support.write.support([wallets[1].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[1].account });
-    const holders = await support.read.tierHolders([3]);
+    const holders = await hook.read.tierHolders([3]);
     assert.equal(holders[0], getAddress(wallets[1].account.address));
   });
 
@@ -627,9 +631,9 @@ describe("Support", async function () {
 
   it("Should filter expired holders from activeTierHolders", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 3]);
+    await hook.write.setMaxSlots([3, 3]);
     const cost3 = await support.read.cost([3, 1]);
 
     // Three holders subscribe to tier 3
@@ -638,8 +642,8 @@ describe("Support", async function () {
     await support.write.support([wallets[2].account.address, 3, 2], { value: await support.read.cost([3, 2]), account: wallets[2].account });
 
     // All three appear in both views
-    assert.equal((await support.read.tierHolders([3])).length, 3);
-    assert.equal((await support.read.activeTierHolders([3])).length, 3);
+    assert.equal((await hook.read.tierHolders([3])).length, 3);
+    assert.equal((await hook.read.activeTierHolders([3])).length, 3);
 
     // Expire wallets[0] and wallets[1]
     await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
@@ -647,47 +651,47 @@ describe("Support", async function () {
     await priceFeed.write.setPrice([ETH_USD]);
 
     // Raw array still has 3 entries, but only wallets[2] is active
-    assert.equal((await support.read.tierHolders([3])).length, 3);
-    const active = await support.read.activeTierHolders([3]);
+    assert.equal((await hook.read.tierHolders([3])).length, 3);
+    const active = await hook.read.activeTierHolders([3]);
     assert.equal(active.length, 1);
     assert.equal(active[0], getAddress(wallets[2].account.address));
   });
 
   it("Should filter tier-changed holders from activeTierHolders", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([2, 2]);
-    await support.write.setMaxSlots([3, 2]);
+    await hook.write.setMaxSlots([2, 2]);
+    await hook.write.setMaxSlots([3, 2]);
 
     // Two holders in tier 3
     const cost3 = await support.read.cost([3, 2]);
     await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
 
-    assert.equal((await support.read.activeTierHolders([3])).length, 2);
+    assert.equal((await hook.read.activeTierHolders([3])).length, 2);
 
     // wallets[0] downgrades to tier 2
     await support.write.support([wallets[0].account.address, 2, 1], { value: parseEther("1"), account: wallets[0].account });
 
     // Tier 3 should only show wallets[1]
-    const active3 = await support.read.activeTierHolders([3]);
+    const active3 = await hook.read.activeTierHolders([3]);
     assert.equal(active3.length, 1);
     assert.equal(active3[0], getAddress(wallets[1].account.address));
 
     // Tier 2 should show wallets[0]
-    const active2 = await support.read.activeTierHolders([2]);
+    const active2 = await hook.read.activeTierHolders([2]);
     assert.equal(active2.length, 1);
     assert.equal(active2[0], getAddress(wallets[0].account.address));
   });
 
   it("Should return empty for activeTierHolders when maxSlots is 0", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // maxSlots defaults to 0 (unlimited / no tracking)
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
 
-    const active = await support.read.activeTierHolders([0]);
+    const active = await hook.read.activeTierHolders([0]);
     assert.equal(active.length, 0);
   });
 
@@ -695,69 +699,70 @@ describe("Support", async function () {
 
   it("Should compact tier array on downgrade via swap-and-pop", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 3]);
+    await hook.write.setMaxSlots([3, 3]);
     const cost3 = await support.read.cost([3, 2]);
 
     // Fill 3 slots: [w0, w1, w2]
     await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
     await support.write.support([wallets[2].account.address, 3, 2], { value: cost3, account: wallets[2].account });
-    assert.equal((await support.read.tierHolders([3])).length, 3);
+    assert.equal((await hook.read.tierHolders([3])).length, 3);
 
     // w0 downgrades — array should shrink to 2 via swap-and-pop: [w2, w1]
     await support.write.support([wallets[0].account.address, 0, 1], { value: parseEther("1"), account: wallets[0].account });
-    const holders = await support.read.tierHolders([3]);
+    const holders = await hook.read.tierHolders([3]);
     assert.equal(holders.length, 2);
 
     // w1 downgrades — array should shrink to 1: [w2]
     await support.write.support([wallets[1].account.address, 0, 1], { value: parseEther("1"), account: wallets[1].account });
-    const holders2 = await support.read.tierHolders([3]);
+    const holders2 = await hook.read.tierHolders([3]);
     assert.equal(holders2.length, 1);
     assert.equal(holders2[0], getAddress(wallets[2].account.address));
   });
 
   it("Should allow new subscriber after compaction frees a slot", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 2]);
+    await hook.write.setMaxSlots([3, 2]);
     const cost3 = await support.read.cost([3, 2]);
+    const cost3Single = await support.read.cost([3, 1]);
 
     // Fill both slots
     await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
 
-    // Full
+    // Full — cost() also reverts when tier is blocked, so use pre-computed price
     await assert.rejects(
-      support.write.support([wallets[2].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[2].account }),
-      /TierFull/,
+      support.write.support([wallets[2].account.address, 3, 1], { value: cost3Single, account: wallets[2].account }),
+      /SubscriptionBlocked/,
     );
 
     // w0 downgrades — compacts array, freeing a slot
     await support.write.support([wallets[0].account.address, 0, 1], { value: parseEther("1"), account: wallets[0].account });
-    assert.equal((await support.read.tierHolders([3])).length, 1);
+    assert.equal((await hook.read.tierHolders([3])).length, 1);
 
     // w2 can now join
     await support.write.support([wallets[2].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[2].account });
-    const holders = await support.read.tierHolders([3]);
+    const holders = await hook.read.tierHolders([3]);
     assert.equal(holders.length, 2);
   });
 
   // --- O(1) duplicate check ---
 
   it("Should not duplicate holder on same-tier extension", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([0, 2]);
+    await hook.write.setMaxSlots([0, 2]);
     const cost0 = await support.read.cost([0, 1]);
 
     await support.write.support([walletClient.account.address, 0, 1], { value: cost0 });
     await support.write.support([walletClient.account.address, 0, 1], { value: cost0 });
     await support.write.support([walletClient.account.address, 0, 1], { value: cost0 });
 
-    const holders = await support.read.tierHolders([0]);
+    const holders = await hook.read.tierHolders([0]);
     assert.equal(holders.length, 1);
     assert.equal(holders[0], getAddress(walletClient.account.address));
   });
@@ -766,14 +771,14 @@ describe("Support", async function () {
 
   it("Should remove from old tier when re-subscribing to different tier after expiry", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([0, 2]);
-    await support.write.setMaxSlots([3, 2]);
+    await hook.write.setMaxSlots([0, 2]);
+    await hook.write.setMaxSlots([3, 2]);
 
     // Subscribe to tier 3
     await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
-    assert.equal((await support.read.tierHolders([3])).length, 1);
+    assert.equal((await hook.read.tierHolders([3])).length, 1);
 
     // Expire
     await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
@@ -784,20 +789,20 @@ describe("Support", async function () {
     await support.write.support([wallets[0].account.address, 0, 1], { value: await support.read.cost([0, 1]), account: wallets[0].account });
 
     // Should be removed from tier 3, added to tier 0
-    assert.equal((await support.read.tierHolders([3])).length, 0);
-    const holders0 = await support.read.tierHolders([0]);
+    assert.equal((await hook.read.tierHolders([3])).length, 0);
+    const holders0 = await hook.read.tierHolders([0]);
     assert.equal(holders0.length, 1);
     assert.equal(holders0[0], getAddress(wallets[0].account.address));
   });
 
   it("Should keep holder in same tier when re-subscribing after expiry", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 2]);
+    await hook.write.setMaxSlots([3, 2]);
 
     await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
-    assert.equal((await support.read.tierHolders([3])).length, 1);
+    assert.equal((await hook.read.tierHolders([3])).length, 1);
 
     // Expire
     await publicClient.request({ method: "evm_increaseTime" as any, params: [30 * 24 * 60 * 60 + 1] });
@@ -808,7 +813,7 @@ describe("Support", async function () {
     await support.write.support([wallets[0].account.address, 3, 1], { value: await support.read.cost([3, 1]), account: wallets[0].account });
 
     // Still one entry, no duplicate
-    const holders = await support.read.tierHolders([3]);
+    const holders = await hook.read.tierHolders([3]);
     assert.equal(holders.length, 1);
     assert.equal(holders[0], getAddress(wallets[0].account.address));
   });
@@ -816,14 +821,15 @@ describe("Support", async function () {
   // --- Edge cases ---
 
   it("Should handle 100% discount", async function () {
-    const { support } = await deploy();
-    await support.write.setDiscount([1, 100]);
+    const { support, discountHook } = await deploy();
+    await support.write.setHook([discountHook.address]);
+    await discountHook.write.setDiscount([1, 100]);
     await support.write.support([walletClient.account.address, 0, 1], { value: 0n });
     assert.equal(await support.read.totalSupply(), 1n);
   });
 
   it("Should emit MetadataUpdate on every call", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([0, 1]);
     await support.write.support([walletClient.account.address, 0, 1], { value: ethCost });
 
@@ -837,7 +843,7 @@ describe("Support", async function () {
   });
 
   it("Should track multiple subscribers independently", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
     await support.write.support([otherWallet.account.address, 2, 1], { value: await support.read.cost([2, 1]), account: otherWallet.account });
 
@@ -849,9 +855,9 @@ describe("Support", async function () {
   // --- Owner grant ---
 
   it("Should allow owner to grant free subscription", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.grant([otherWallet.account.address, 3, 6]);
+    await support.write.grant([otherWallet.account.address, 3, 6, 0n]);
 
     assert.equal(await support.read.totalSupply(), 1n);
     assert.equal(await support.read.activeToken([otherWallet.account.address]), 1n);
@@ -863,12 +869,12 @@ describe("Support", async function () {
   });
 
   it("Should allow owner to grant extension", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.grant([otherWallet.account.address, 0, 1]);
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
     const firstExpiry = await support.read.expiresAt([1n]);
 
-    await support.write.grant([otherWallet.account.address, 0, 1]);
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
     const secondExpiry = await support.read.expiresAt([1n]);
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n);
@@ -876,18 +882,138 @@ describe("Support", async function () {
   });
 
   it("Should reject non-owner grant", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await assert.rejects(
-      support.write.grant([otherWallet.account.address, 0, 1], { account: otherWallet.account }),
+      support.write.grant([otherWallet.account.address, 0, 1, 0n], { account: otherWallet.account }),
       /OwnableUnauthorizedAccount/,
     );
+  });
+
+  // --- Grant: startAt ---
+
+  it("Should grant with future startAt", async function () {
+    const { support } = await deploy();
+    const block = await publicClient.getBlock();
+    const futureStart = block.timestamp + 86400n; // 1 day from now
+
+    await support.write.grant([otherWallet.account.address, 2, 3, futureStart]);
+
+    const tokenId = await support.read.activeToken([otherWallet.account.address]);
+    assert.equal(await support.read.startedAt([tokenId]), futureStart);
+
+    const segs = await support.read.segments([tokenId]);
+    assert.equal(segs[0].startedAt, futureStart);
+
+    // Expiry is based on future start + 3 months
+    const expires = await support.read.expiresAt([tokenId]);
+    assert.equal(expires, futureStart + 3n * 30n * 24n * 60n * 60n);
+  });
+
+  it("Should grant with past startAt (backdating)", async function () {
+    const { support } = await deploy();
+    const block = await publicClient.getBlock();
+    const pastStart = block.timestamp - 30n * 24n * 60n * 60n; // 1 month ago
+
+    await support.write.grant([otherWallet.account.address, 0, 3, pastStart]);
+
+    const tokenId = await support.read.activeToken([otherWallet.account.address]);
+    assert.equal(await support.read.startedAt([tokenId]), pastStart);
+
+    // Expiry is pastStart + 3 months = ~2 months from now
+    const expires = await support.read.expiresAt([tokenId]);
+    assert.equal(expires, pastStart + 3n * 30n * 24n * 60n * 60n);
+  });
+
+  it("Should ignore startAt on grant extension (not new)", async function () {
+    const { support } = await deploy();
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
+
+    const firstExpiry = await support.read.expiresAt([1n]);
+    const firstStart = await support.read.startedAt([1n]);
+
+    // Extend with a startAt — should be ignored, expiry extends from current
+    await support.write.grant([otherWallet.account.address, 0, 1, 9999999999n]);
+
+    assert.equal(await support.read.startedAt([1n]), firstStart); // unchanged
+    assert.equal(await support.read.expiresAt([1n]), firstExpiry + 30n * 24n * 60n * 60n);
+  });
+
+  // --- Grant vs hook ---
+
+  it("Should grant bypassing beforeSubscribe but still notifying hook", async function () {
+    const { support, hook } = await deploy();
+
+    await hook.write.setMaxSlots([2, 1]);
+    const cost2 = await support.read.cost([2, 1]);
+
+    // Fill the slot
+    await support.write.support([walletClient.account.address, 2, 1], { value: cost2 });
+
+    // support() is blocked by beforeSubscribe
+    await assert.rejects(
+      support.write.support([otherWallet.account.address, 2, 1], {
+        value: cost2,
+        account: otherWallet.account,
+      }),
+      /SubscriptionBlocked/,
+    );
+
+    // grant() skips beforeSubscribe but onSubscribe still tracks state — reverts if full
+    await assert.rejects(
+      support.write.grant([otherWallet.account.address, 2, 1, 0n]),
+      /TierFull/,
+    );
+
+    // Owner increases capacity, then grant works
+    await hook.write.setMaxSlots([2, 2]);
+    await support.write.grant([otherWallet.account.address, 2, 1, 0n]);
+    assert.equal(await support.read.totalSupply(), 2n);
+
+    const [tier, active] = await support.read.currentTier([2n]);
+    assert.equal(tier, 2);
+    assert.equal(active, true);
+  });
+
+  // --- Grant tier change ---
+
+  it("Should grant tier change without price conversion", async function () {
+    const { support } = await deploy();
+
+    // Grant tier 2 ($25/mo) for 2 months
+    await support.write.grant([otherWallet.account.address, 2, 2, 0n]);
+    const expiryBefore = await support.read.expiresAt([1n]);
+
+    // Grant tier change to tier 0 ($5/mo) with 1 month — should NOT convert remaining time
+    await support.write.grant([otherWallet.account.address, 0, 1, 0n]);
+    const expiryAfter = await support.read.expiresAt([1n]);
+
+    // Expiry is simply old expiry + 1 month (no 5x conversion like support() does)
+    assert.equal(expiryAfter, expiryBefore + 30n * 24n * 60n * 60n);
+
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 0);
+  });
+
+  it("Should grant tier change with duration 0", async function () {
+    const { support } = await deploy();
+
+    await support.write.grant([otherWallet.account.address, 0, 2, 0n]);
+    const expiryBefore = await support.read.expiresAt([1n]);
+
+    // Change tier only, no extension
+    await support.write.grant([otherWallet.account.address, 2, 0, 0n]);
+    const expiryAfter = await support.read.expiresAt([1n]);
+
+    assert.equal(expiryAfter, expiryBefore); // unchanged
+    const [tier] = await support.read.currentTier([1n]);
+    assert.equal(tier, 2);
   });
 
   // --- Gifting ---
 
   it("Should allow gifting a subscription to another address", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const ethCost = await support.read.cost([2, 3]);
 
     // walletClient pays, otherWallet receives
@@ -906,7 +1032,7 @@ describe("Support", async function () {
 
   it("Should reject third-party tier change", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // wallets[2] subscribes at tier 0
     await support.write.support([wallets[2].account.address, 0, 1], {
@@ -931,7 +1057,7 @@ describe("Support", async function () {
   });
 
   it("Should allow recipient to change their own tier", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([otherWallet.account.address, 0, 2], {
       value: await support.read.cost([0, 2]),
@@ -949,7 +1075,7 @@ describe("Support", async function () {
   });
 
   it("Should reject support to zero address", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     await assert.rejects(
       support.write.support(["0x0000000000000000000000000000000000000000", 0, 1], {
         value: await support.read.cost([0, 1]),
@@ -959,13 +1085,13 @@ describe("Support", async function () {
   });
 
   it("Should allow grant when oracle is stale", async function () {
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
     // Make oracle stale
     await priceFeed.write.setStale();
 
     // Grant should work (skips oracle)
-    await support.write.grant([otherWallet.account.address, 2, 3]);
+    await support.write.grant([otherWallet.account.address, 2, 3, 0n]);
 
     const [tier, active] = await support.read.currentTier([1n]);
     assert.equal(tier, 2);
@@ -975,7 +1101,7 @@ describe("Support", async function () {
   // --- Renderer ---
 
   it("Should allow owner to update renderer", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const newRenderer = await viem.deployContract("SupportRenderer", []);
     await support.write.setRenderer([newRenderer.address]);
     assert.equal(
@@ -985,7 +1111,7 @@ describe("Support", async function () {
   });
 
   it("Should reject non-owner setRenderer", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const newRenderer = await viem.deployContract("SupportRenderer", []);
     await assert.rejects(
       support.write.setRenderer([newRenderer.address], { account: otherWallet.account }),
@@ -1001,10 +1127,14 @@ describe("Support", async function () {
     const block = await publicClient.getBlock();
     const futureSaleStart = block.timestamp + 86400n; // 1 day from chain time
     const support = await viem.deployContract("SupportToken", [
-      "TestProject", "TEST", '<path d="M0 0"/>', priceFeed.address,
-      tierPrices, discountMinMonths, discountPercentOff, renderer.address, futureSaleStart,
+      "TestProject", "TEST", priceFeed.address,
+      tierPrices, futureSaleStart, '<path d="M0 0"/>', renderer.address,
     ]);
-    return { support, priceFeed, renderer, futureSaleStart };
+
+    const discountHook = await viem.deployContract("DiscountHook", [discountMinMonths, discountPercentOff]);
+    await support.write.setHook([discountHook.address]);
+
+    return { support, priceFeed, renderer, discountHook, futureSaleStart };
   }
 
   it("Should revert support() before sale starts", async function () {
@@ -1032,7 +1162,7 @@ describe("Support", async function () {
   it("Should allow grant() before sale starts", async function () {
     const { support } = await deployWithFutureSale();
 
-    await support.write.grant([otherWallet.account.address, 2, 3]);
+    await support.write.grant([otherWallet.account.address, 2, 3, 0n]);
     assert.equal(await support.read.totalSupply(), 1n);
   });
 
@@ -1057,7 +1187,7 @@ describe("Support", async function () {
   });
 
   it("Should revert setSaleStart after sale has started", async function () {
-    const { support } = await deploy(); // saleStart = 0, already started
+    const { support, hook } = await deploy(); // saleStart = 0, already started
 
     await assert.rejects(
       support.write.setSaleStart([9999999999n]),
@@ -1077,7 +1207,7 @@ describe("Support", async function () {
   // --- Gifting ---
 
   it("Should allow gifting an extension to existing subscription", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // Other wallet self-subscribes
     await support.write.support([otherWallet.account.address, 0, 1], {
@@ -1099,7 +1229,7 @@ describe("Support", async function () {
   // --- Reentrancy through excess refund ---
 
   it("Should handle reentrancy through excess refund without corruption", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const attacker = await viem.deployContract("ReentrancyAttacker", [support.address]);
 
     const ethCost = await support.read.cost([0, 1]);
@@ -1124,10 +1254,10 @@ describe("Support", async function () {
   // --- Extreme duration values ---
 
   it("Should handle type(uint32).max duration via grant", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const maxDuration = 2 ** 32 - 1; // type(uint32).max = 4294967295
 
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
 
     const tokenId = await support.read.activeToken([otherWallet.account.address]);
     assert.equal(tokenId, 1n);
@@ -1151,12 +1281,12 @@ describe("Support", async function () {
   });
 
   it("Should cap expiry at uint64.max on repeated large extensions", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
     const maxDuration = 2 ** 32 - 1;
 
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
-    await support.write.grant([otherWallet.account.address, 0, maxDuration]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
+    await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n]);
 
     const tokenId = await support.read.activeToken([otherWallet.account.address]);
     const expires = await support.read.expiresAt([tokenId]);
@@ -1172,14 +1302,14 @@ describe("Support", async function () {
   // --- Rapid tier switching ---
 
   it("Should handle many tier switches and render tokenURI", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.grant([walletClient.account.address, 0, 12]);
+    await support.write.grant([walletClient.account.address, 0, 12, 0n]);
 
     // Switch tiers via grant (avoids compounding cost from time conversion)
     const switches = [1, 2, 3, 2, 1, 0, 3] as const;
     for (const tier of switches) {
-      await support.write.grant([walletClient.account.address, tier, 1]);
+      await support.write.grant([walletClient.account.address, tier, 1, 0n]);
     }
 
     const segs = await support.read.segments([1n]);
@@ -1198,57 +1328,58 @@ describe("Support", async function () {
 
   it("Should handle decreasing maxSlots below current holder count", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([0, 3]);
+    await hook.write.setMaxSlots([0, 3]);
     const cost0 = await support.read.cost([0, 2]);
+    const cost0Single = await support.read.cost([0, 1]);
 
     await support.write.support([wallets[0].account.address, 0, 2], { value: cost0, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 0, 2], { value: cost0, account: wallets[1].account });
     await support.write.support([wallets[2].account.address, 0, 2], { value: cost0, account: wallets[2].account });
-    assert.equal((await support.read.tierHolders([0])).length, 3);
+    assert.equal((await hook.read.tierHolders([0])).length, 3);
 
     // Decrease below current count — existing holders stay, new ones blocked
-    await support.write.setMaxSlots([0, 1]);
+    await hook.write.setMaxSlots([0, 1]);
 
     await assert.rejects(
       support.write.support([wallets[3].account.address, 0, 1], {
-        value: await support.read.cost([0, 1]),
+        value: cost0Single,
         account: wallets[3].account,
       }),
-      /TierFull/,
+      /SubscriptionBlocked/,
     );
 
     await support.write.support([wallets[0].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: cost0Single,
       account: wallets[0].account,
     });
   });
 
   it("Should allow new subscriber after increasing maxSlots past TierFull", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([1, 1]);
+    await hook.write.setMaxSlots([1, 1]);
     const cost1 = await support.read.cost([1, 1]);
 
     await support.write.support([wallets[0].account.address, 1, 1], { value: cost1, account: wallets[0].account });
 
     await assert.rejects(
       support.write.support([wallets[1].account.address, 1, 1], { value: cost1, account: wallets[1].account }),
-      /TierFull/,
+      /SubscriptionBlocked/,
     );
 
-    await support.write.setMaxSlots([1, 2]);
+    await hook.write.setMaxSlots([1, 2]);
 
     await support.write.support([wallets[1].account.address, 1, 1], { value: cost1, account: wallets[1].account });
-    assert.equal((await support.read.tierHolders([1])).length, 2);
+    assert.equal((await hook.read.tierHolders([1])).length, 2);
   });
 
   // --- Concurrent subscriptions after transfer ---
 
   it("Should handle subscription lifecycle after transfer: Bob extends, Alice creates new", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 2, 2], { value: await support.read.cost([2, 2]) });
     assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
@@ -1286,15 +1417,15 @@ describe("Support", async function () {
 
   it("Should block new subscriber after transfer keeps tier full", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     // Cap tier 2 at 1 slot
-    await support.write.setMaxSlots([2, 1]);
+    await hook.write.setMaxSlots([2, 1]);
     const cost2 = await support.read.cost([2, 3]);
 
     // Alice subscribes at tier 2
     await support.write.support([wallets[0].account.address, 2, 3], { value: cost2, account: wallets[0].account });
-    assert.equal((await support.read.activeTierHolders([2])).length, 1);
+    assert.equal((await hook.read.activeTierHolders([2])).length, 1);
 
     // Alice transfers active NFT to Bob
     await support.write.transferFrom(
@@ -1303,31 +1434,31 @@ describe("Support", async function () {
     );
 
     // Bob now holds the slot — tier is still full
-    const active = await support.read.activeTierHolders([2]);
+    const active = await hook.read.activeTierHolders([2]);
     assert.equal(active.length, 1);
     assert.equal(active[0], getAddress(wallets[1].account.address));
 
-    // Charlie cannot subscribe — tier is full
+    // Charlie cannot subscribe — tier is full (cost() also reverts when blocked)
     await assert.rejects(
       support.write.support([wallets[2].account.address, 2, 1], {
-        value: await support.read.cost([2, 1]),
+        value: cost2,
         account: wallets[2].account,
       }),
-      /TierFull/,
+      /SubscriptionBlocked/,
     );
   });
 
   it("Should migrate tier holder entry on transfer", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([3, 2]);
+    await hook.write.setMaxSlots([3, 2]);
     const cost3 = await support.read.cost([3, 2]);
 
     // Two holders in tier 3
     await support.write.support([wallets[0].account.address, 3, 2], { value: cost3, account: wallets[0].account });
     await support.write.support([wallets[1].account.address, 3, 2], { value: cost3, account: wallets[1].account });
-    assert.equal((await support.read.tierHolders([3])).length, 2);
+    assert.equal((await hook.read.tierHolders([3])).length, 2);
 
     // wallets[0] transfers to wallets[2]
     await support.write.transferFrom(
@@ -1336,7 +1467,7 @@ describe("Support", async function () {
     );
 
     // tierHolders should now contain wallets[1] and wallets[2], not wallets[0]
-    const holders = await support.read.tierHolders([3]);
+    const holders = await hook.read.tierHolders([3]);
     assert.equal(holders.length, 2);
     const holderSet = new Set(holders.map((h: string) => h.toLowerCase()));
     assert.ok(!holderSet.has(wallets[0].account.address.toLowerCase()));
@@ -1346,15 +1477,15 @@ describe("Support", async function () {
 
   it("Should not modify tier holders when transferring expired token", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([0, 2]);
+    await hook.write.setMaxSlots([0, 2]);
 
     await support.write.support([wallets[0].account.address, 0, 1], {
       value: await support.read.cost([0, 1]),
       account: wallets[0].account,
     });
-    assert.equal((await support.read.tierHolders([0])).length, 1);
+    assert.equal((await hook.read.tierHolders([0])).length, 1);
 
     // Expire
     await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
@@ -1368,19 +1499,19 @@ describe("Support", async function () {
     );
 
     // Tier holders unchanged (wallets[0] still listed, stale)
-    const holders = await support.read.tierHolders([0]);
+    const holders = await hook.read.tierHolders([0]);
     assert.equal(holders.length, 1);
     assert.equal(holders[0], getAddress(wallets[0].account.address));
 
     // No active holders
-    assert.equal((await support.read.activeTierHolders([0])).length, 0);
+    assert.equal((await hook.read.activeTierHolders([0])).length, 0);
   });
 
   it("Should not add receiver to tier if they already have an active token", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([2, 2]);
+    await hook.write.setMaxSlots([2, 2]);
 
     // Both wallets subscribe at tier 2
     await support.write.support([wallets[0].account.address, 2, 3], {
@@ -1401,21 +1532,21 @@ describe("Support", async function () {
     assert.equal(await support.read.activeToken([wallets[1].account.address]), 2n);
 
     // wallets[0] removed from tier, wallets[1] still there (already was)
-    const holders = await support.read.tierHolders([2]);
+    const holders = await hook.read.tierHolders([2]);
     assert.equal(holders.length, 1);
     assert.equal(holders[0], getAddress(wallets[1].account.address));
   });
 
   it("Should allow Alice to resubscribe after transferring away her active token", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([2, 2]);
+    await hook.write.setMaxSlots([2, 2]);
     const cost2 = await support.read.cost([2, 2]);
 
     // Alice subscribes
     await support.write.support([wallets[0].account.address, 2, 2], { value: cost2, account: wallets[0].account });
-    assert.equal((await support.read.tierHolders([2])).length, 1);
+    assert.equal((await hook.read.tierHolders([2])).length, 1);
 
     // Transfer to Bob
     await support.write.transferFrom(
@@ -1429,16 +1560,16 @@ describe("Support", async function () {
       account: wallets[0].account,
     });
 
-    const holders = await support.read.tierHolders([2]);
+    const holders = await hook.read.tierHolders([2]);
     assert.equal(holders.length, 2);
-    const active = await support.read.activeTierHolders([2]);
+    const active = await hook.read.activeTierHolders([2]);
     assert.equal(active.length, 2);
   });
 
   it("Should keep expired activeToken pointers from hiding another active subscription", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
-    await support.write.setMaxSlots([2, 1]);
+    await hook.write.setMaxSlots([2, 1]);
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: await support.read.cost([0, 1]),
@@ -1457,13 +1588,13 @@ describe("Support", async function () {
     await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
     await publicClient.request({ method: "evm_mine" as any, params: [] });
 
-    const active = await support.read.activeTierHolders([2]);
+    const active = await hook.read.activeTierHolders([2]);
     assert.equal(active.length, 1);
     assert.equal(active[0], getAddress(walletClient.account.address));
   });
 
   it("Should extend the surviving active token after the selected pointer expires", async function () {
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: await support.read.cost([0, 1]),
@@ -1496,9 +1627,10 @@ describe("Support", async function () {
 
   it("Should keep tier slots full when a different owned token remains active", async function () {
     const wallets = await viem.getWalletClients();
-    const { support, priceFeed } = await deploy();
+    const { support, priceFeed, hook } = await deploy();
 
-    await support.write.setMaxSlots([2, 1]);
+    await hook.write.setMaxSlots([2, 1]);
+    const cost2 = await support.read.cost([2, 1]);
 
     await support.write.support([wallets[0].account.address, 0, 1], {
       value: await support.read.cost([0, 1]),
@@ -1519,10 +1651,10 @@ describe("Support", async function () {
 
     await assert.rejects(
       support.write.support([wallets[2].account.address, 2, 1], {
-        value: await support.read.cost([2, 1]),
+        value: cost2,
         account: wallets[2].account,
       }),
-      /TierFull/,
+      /SubscriptionBlocked/,
     );
   });
 
@@ -1530,7 +1662,7 @@ describe("Support", async function () {
 
   it("Should allow mass registration at free tier (tierPrice = 0)", async function () {
     const wallets = await viem.getWalletClients();
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.setTierPrice([0, 0n]);
     assert.equal(await support.read.cost([0, 1]), 0n);
@@ -1555,7 +1687,7 @@ describe("Support", async function () {
   });
 
   it("Should allow free tier extension and upgrade", async function () {
-    const { support } = await deploy();
+    const { support, hook } = await deploy();
 
     await support.write.setTierPrice([0, 0n]);
 
@@ -1586,10 +1718,12 @@ describe("BaseSupport", async function () {
       "TEST",
       priceFeed.address,
       tierPrices,
-      discountMinMonths,
-      discountPercentOff,
       0n,
     ]);
+
+    const discountHook = await viem.deployContract("DiscountHook", [discountMinMonths, discountPercentOff]);
+    await support.write.setHook([discountHook.address]);
+
     return { support, priceFeed };
   }
 
