@@ -3,6 +3,8 @@ pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {HasPriceFeed, AggregatorV3Interface} from "@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol";
+import {WithSaleStart} from "@1001-digital/erc721-extensions/contracts/WithSaleStart.sol";
 import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 
 /**
@@ -20,7 +22,7 @@ import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 *  @author ygg
 *  @notice A tiered support system on the world computer.
 */
-contract Support is ERC721, Ownable2Step {
+contract Support is ERC721, Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Errors ---
 
@@ -30,11 +32,9 @@ contract Support is ERC721, Ownable2Step {
     error InvalidDiscount();
     error InsufficientPayment();
     error TransferFailed();
-    error StalePrice();
     error NothingToWithdraw();
     error TierFull();
     error TierChangeForbidden();
-    error InvalidPriceFeed();
     error UnsafeString();
 
     // --- Events ---
@@ -53,7 +53,6 @@ contract Support is ERC721, Ownable2Step {
     event MaxSlotsUpdated(uint8 indexed tier, uint16 maxSlots);
     event Withdrawal(address indexed to, uint256 amount);
     event MetadataUpdate(uint256 tokenId);
-    event PriceFeedUpdated(address priceFeed);
     event ProjectNameUpdated(string name);
     event ProjectSymbolUpdated(string symbol);
     event LogoUpdated();
@@ -61,7 +60,6 @@ contract Support is ERC721, Ownable2Step {
 
     // --- State ---
 
-    AggregatorV3Interface public priceFeed;
     ISupportRenderer public renderer;
 
     // Project metadata
@@ -97,14 +95,14 @@ contract Support is ERC721, Ownable2Step {
         address _priceFeed,
         uint128[4] memory _tierPrices,
         uint16 _discountMinMonths,
-        uint16 _discountPercentOff
-    ) ERC721("", "") Ownable(msg.sender) {
+        uint16 _discountPercentOff,
         address _renderer,
+        uint256 _saleStart
+    ) ERC721("", "") Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
         if (_discountPercentOff > 100) revert InvalidDiscount();
         projectName = _projectName;
         projectSymbol = _projectSymbol;
         logo = _logo;
-        priceFeed = AggregatorV3Interface(_priceFeed);
         tierPrices = _tierPrices;
         discountMinMonths = _discountMinMonths;
         discountPercentOff = _discountPercentOff;
@@ -165,6 +163,14 @@ contract Support is ERC721, Ownable2Step {
         return from;
     }
 
+    function transferOwnership(address newOwner) public override(Ownable2Step, Ownable) onlyOwner {
+        Ownable2Step.transferOwnership(newOwner);
+    }
+
+    function _transferOwnership(address newOwner) internal override(Ownable2Step, Ownable) {
+        Ownable2Step._transferOwnership(newOwner);
+    }
+
     function renounceOwnership() public pure override {
         revert();
     }
@@ -174,7 +180,7 @@ contract Support is ERC721, Ownable2Step {
     /// @notice Subscribe an address at a given tier for a number of months.
     /// @dev Third parties can extend or start subscriptions, but only the
     ///      recipient (or owner) may change tiers.
-    function support(address recipient, uint8 tier, uint32 duration) external payable {
+    function support(address recipient, uint8 tier, uint32 duration) external payable afterSaleStart {
         if (recipient == address(0)) revert InvalidRecipient();
 
         uint256 tokenId = activeToken[recipient];
@@ -225,13 +231,6 @@ contract Support is ERC721, Ownable2Step {
 
 
     // --- Owner ---
-
-    /// @notice Update the Chainlink price feed address.
-    function setPriceFeed(address _priceFeed) external onlyOwner {
-        if (_priceFeed == address(0)) revert InvalidPriceFeed();
-        priceFeed = AggregatorV3Interface(_priceFeed);
-        emit PriceFeedUpdated(_priceFeed);
-    }
 
     /// @notice Update a tier's monthly USD price.
     function setTierPrice(uint8 tier, uint128 priceUSD) external onlyOwner {
@@ -423,15 +422,6 @@ contract Support is ERC721, Ownable2Step {
         uint256 usd = _discountedUSD(tier, duration);
         if (usd == 0) return 0;
         return _usdToEth(usd);
-    }
-
-    function _usdToEth(uint256 usdAmount) internal view returns (uint256) {
-        (uint80 roundId, int256 price, , uint256 updatedAt, uint80 answeredInRound)
-            = priceFeed.latestRoundData();
-        if (price <= 0) revert StalePrice();
-        if (answeredInRound < roundId) revert StalePrice();
-        if (block.timestamp - updatedAt > 1 hours) revert StalePrice();
-        return usdAmount * 1e18 / uint256(price);
     }
 
     // --- Validation ---

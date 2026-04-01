@@ -23,6 +23,7 @@ describe("Support", async function () {
 
   async function deploy() {
     const priceFeed = await viem.deployContract("MockPriceFeed", [ETH_USD]);
+    const renderer = await viem.deployContract("SupportRenderer", []);
     const support = await viem.deployContract("Support", [
       "TestProject",
       "TEST",
@@ -31,8 +32,10 @@ describe("Support", async function () {
       tierPrices,
       discountMinMonths,
       discountPercentOff,
+      renderer.address,
+      0n,
     ]);
-    return { support, priceFeed };
+    return { support, priceFeed, renderer };
   }
 
   // --- Cost ---
@@ -309,7 +312,7 @@ describe("Support", async function () {
     await assert.rejects(support.read.cost([0, 1]), /StalePrice/);
 
     await priceFeed.write.setPrice([ETH_USD]);
-    await priceFeed.write.setRoundData([10, 9]);
+    await priceFeed.write.setAnsweredInRound([0]);
     await assert.rejects(support.read.cost([0, 1]), /StalePrice/);
   });
 
@@ -720,8 +723,7 @@ describe("Support", async function () {
     const { support, priceFeed } = await deploy();
 
     // Make oracle stale
-    const block = await publicClient.getBlock();
-    await priceFeed.write.setUpdatedAt([block.timestamp - 7200n]);
+    await priceFeed.write.setStale();
 
     // Grant should work (skips oracle)
     await support.write.grant([otherWallet.account.address, 2, 3]);
@@ -730,6 +732,110 @@ describe("Support", async function () {
     assert.equal(tier, 2);
     assert.equal(active, true);
   });
+
+  // --- Renderer ---
+
+  it("Should allow owner to update renderer", async function () {
+    const { support } = await deploy();
+    const newRenderer = await viem.deployContract("SupportRenderer", []);
+    await support.write.setRenderer([newRenderer.address]);
+    assert.equal(
+      (await support.read.renderer()).toLowerCase(),
+      newRenderer.address.toLowerCase(),
+    );
+  });
+
+  it("Should reject non-owner setRenderer", async function () {
+    const { support } = await deploy();
+    const newRenderer = await viem.deployContract("SupportRenderer", []);
+    await assert.rejects(
+      support.write.setRenderer([newRenderer.address], { account: otherWallet.account }),
+      /OwnableUnauthorizedAccount/,
+    );
+  });
+
+  // --- Sale Start ---
+
+  async function deployWithFutureSale() {
+    const priceFeed = await viem.deployContract("MockPriceFeed", [ETH_USD]);
+    const renderer = await viem.deployContract("SupportRenderer", []);
+    const block = await publicClient.getBlock();
+    const futureSaleStart = block.timestamp + 86400n; // 1 day from chain time
+    const support = await viem.deployContract("Support", [
+      "TestProject", "TEST", '<path d="M0 0"/>', priceFeed.address,
+      tierPrices, discountMinMonths, discountPercentOff, renderer.address, futureSaleStart,
+    ]);
+    return { support, priceFeed, renderer, futureSaleStart };
+  }
+
+  it("Should revert support() before sale starts", async function () {
+    const { support } = await deployWithFutureSale();
+
+    await assert.rejects(
+      support.write.support([walletClient.account.address, 0, 1], { value: parseEther("1") }),
+      /0x2d0a346e/, // SaleNotStarted()
+    );
+  });
+
+  it("Should allow support() after sale starts", async function () {
+    const { support, priceFeed } = await deployWithFutureSale();
+
+    // Advance past sale start
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [86401] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    const ethCost = await support.read.cost([0, 1]);
+    await support.write.support([walletClient.account.address, 0, 1], { value: ethCost });
+    assert.equal(await support.read.totalSupply(), 1n);
+  });
+
+  it("Should allow grant() before sale starts", async function () {
+    const { support } = await deployWithFutureSale();
+
+    await support.write.grant([otherWallet.account.address, 2, 3]);
+    assert.equal(await support.read.totalSupply(), 1n);
+  });
+
+  it("Should return correct saleStart and saleStarted", async function () {
+    const { support, futureSaleStart } = await deployWithFutureSale();
+
+    assert.equal(await support.read.saleStart(), futureSaleStart);
+    assert.equal(await support.read.saleStarted(), false);
+
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [86401] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+
+    assert.equal(await support.read.saleStarted(), true);
+  });
+
+  it("Should allow owner to setSaleStart before sale", async function () {
+    const { support, futureSaleStart } = await deployWithFutureSale();
+
+    const newStart = futureSaleStart + 86400n;
+    await support.write.setSaleStart([newStart]);
+    assert.equal(await support.read.saleStart(), newStart);
+  });
+
+  it("Should revert setSaleStart after sale has started", async function () {
+    const { support } = await deploy(); // saleStart = 0, already started
+
+    await assert.rejects(
+      support.write.setSaleStart([9999999999n]),
+      /SaleAlreadyStarted|custom error/,
+    );
+  });
+
+  it("Should reject non-owner setSaleStart", async function () {
+    const { support } = await deployWithFutureSale();
+
+    await assert.rejects(
+      support.write.setSaleStart([9999999999n], { account: otherWallet.account }),
+      /OwnableUnauthorizedAccount/,
+    );
+  });
+
+  // --- Gifting ---
 
   it("Should allow gifting an extension to existing subscription", async function () {
     const { support } = await deploy();

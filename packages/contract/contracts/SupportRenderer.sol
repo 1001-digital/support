@@ -3,9 +3,10 @@ pragma solidity ^0.8.28;
 
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
+import {WithENSReverseLookup} from "@1001-digital/erc721-extensions/contracts/WithENSReverseLookup.sol";
 import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 
-contract SupportRenderer is ISupportRenderer {
+contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
 
     function tokenURI(TokenData calldata data) external view returns (string memory) {
         string memory svg = _buildSVG(data);
@@ -88,69 +89,4 @@ contract SupportRenderer is ISupportRenderer {
         return attrs;
     }
 
-    // --- ENS ---
-
-    /// @dev namehash("addr.reverse")
-    bytes32 internal constant ADDR_REVERSE_NODE = 0x91d1777781884d03a6757a803996e38de2a42967fb37eeaca72729271025a9e2;
-
-    address internal constant ENS_REGISTRY = 0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e;
-
-    /// @dev Try ENS reverse resolution, fall back to short hex.
-    function _displayName(address addr) internal view returns (string memory) {
-        if (ENS_REGISTRY.code.length == 0) return _shortHex(addr);
-
-        bytes32 node = keccak256(abi.encodePacked(ADDR_REVERSE_NODE, _sha3Hex(addr)));
-
-        try IENS(ENS_REGISTRY).resolver(node) returns (address resolver) {
-            if (resolver != address(0) && resolver.code.length > 0) {
-                try IENSResolver(resolver).name(node) returns (string memory ensName) {
-                    if (bytes(ensName).length > 0) return ensName;
-                } catch {}
-            }
-        } catch {}
-
-        return _shortHex(addr);
-    }
-
-    /// @dev keccak256 of the lowercase hex representation of an address (no 0x prefix).
-    function _sha3Hex(address addr) internal pure returns (bytes32) {
-        bytes memory result = new bytes(40);
-        uint160 val = uint160(addr);
-        unchecked {
-            for (uint256 i = 40; i > 0; --i) {
-                result[i - 1] = _HEX_LOWER[val & 0xf];
-                val >>= 4;
-            }
-        }
-        return keccak256(result);
-    }
-
-    bytes internal constant _HEX_LOWER = "0123456789abcdef";
-    bytes internal constant _HEX = "0123456789ABCDEF";
-
-    /// @dev Returns "0x1234...5678" (6 prefix + 4 suffix).
-    function _shortHex(address addr) internal pure returns (string memory) {
-        bytes memory full = new bytes(40);
-        uint160 val = uint160(addr);
-        unchecked {
-            for (uint256 i = 40; i > 0; --i) {
-                full[i - 1] = _HEX[val & 0xf];
-                val >>= 4;
-            }
-        }
-        return string.concat(
-            "0x", string(abi.encodePacked(full[0], full[1], full[2], full[3])),
-            "...",
-            string(abi.encodePacked(full[36], full[37], full[38], full[39]))
-        );
-    }
-
-}
-
-interface IENS {
-    function resolver(bytes32 node) external view returns (address);
-}
-
-interface IENSResolver {
-    function name(bytes32 node) external view returns (string memory);
 }
