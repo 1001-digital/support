@@ -4,22 +4,23 @@ import { describe, it } from "node:test";
 import { network } from "hardhat";
 import { getAddress, parseEther } from "viem";
 
+const { viem } = await network.connect();
+const publicClient = await viem.getPublicClient();
+const [walletClient, otherWallet] = await viem.getWalletClients();
+
+const ETH_USD = 200000000000n; // $2,000
+
+const tierPrices: readonly [bigint, bigint, bigint, bigint] = [
+  500000000n,   // $5/mo
+  1000000000n,  // $10/mo
+  2500000000n,  // $25/mo
+  5000000000n,  // $50/mo
+];
+
+const discountMinMonths = 12;
+const discountPercentOff = 20;
+
 describe("Support", async function () {
-  const { viem } = await network.connect();
-  const publicClient = await viem.getPublicClient();
-  const [walletClient, otherWallet] = await viem.getWalletClients();
-
-  const ETH_USD = 200000000000n; // $2,000
-
-  const tierPrices: readonly [bigint, bigint, bigint, bigint] = [
-    500000000n,   // $5/mo
-    1000000000n,  // $10/mo
-    2500000000n,  // $25/mo
-    5000000000n,  // $50/mo
-  ];
-
-  const discountMinMonths = 12;
-  const discountPercentOff = 20;
 
   async function deploy() {
     const priceFeed = await viem.deployContract("MockPriceFeed", [ETH_USD]);
@@ -468,6 +469,23 @@ describe("Support", async function () {
     assert.equal(await support.read.activeToken([otherWallet.account.address]), 1n);
   });
 
+  it("Should not set activeToken when transferring expired NFT", async function () {
+    const { support } = await deploy();
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+
+    // Fast-forward past expiry
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+
+    // Transfer expired NFT
+    await support.write.transferFrom([walletClient.account.address, otherWallet.account.address, 1n]);
+
+    // Receiver should NOT get activeToken set
+    assert.equal(await support.read.activeToken([otherWallet.account.address]), 0n);
+    assert.equal(await support.read.ownerOf([1n]), getAddress(otherWallet.account.address));
+  });
+
   it("Should revert unauthorized transfer", async function () {
     const { support } = await deploy();
     await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
@@ -855,5 +873,128 @@ describe("Support", async function () {
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n);
     assert.equal(await support.read.totalSupply(), 1n); // no new NFT
+  });
+
+  // --- subscriberOf stability ---
+
+  it("Should not change subscriberOf on extension or tier change", async function () {
+    const { support } = await deploy();
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+
+    // Extend same tier
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+
+    // Upgrade tier
+    await support.write.support([walletClient.account.address, 2, 1], { value: parseEther("1") });
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+  });
+
+  it("Should preserve subscriberOf after transfer", async function () {
+    const { support } = await deploy();
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: await support.read.cost([0, 1]) });
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+
+    // Transfer to otherWallet
+    await support.write.transferFrom([walletClient.account.address, otherWallet.account.address, 1n]);
+
+    // ownerOf changes, subscriberOf does not
+    assert.equal(await support.read.ownerOf([1n]), getAddress(otherWallet.account.address));
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+  });
+});
+
+// --- Base Support (without tokens) ---
+
+describe("BaseSupport", async function () {
+  async function deployBase() {
+    const priceFeed = await viem.deployContract("MockPriceFeed", [ETH_USD]);
+    const support = await viem.deployContract("MockSupport", [
+      "TestProject",
+      "TEST",
+      priceFeed.address,
+      tierPrices,
+      discountMinMonths,
+      discountPercentOff,
+      0n,
+    ]);
+    return { support, priceFeed };
+  }
+
+  it("Should create subscriptions with IDs but no NFTs", async function () {
+    const { support } = await deployBase();
+    const cost = await support.read.cost([0, 1]);
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost });
+
+    assert.equal(await support.read.totalSupply(), 1n);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+
+    const segs = await support.read.segments([1n]);
+    assert.equal(segs.length, 1);
+    assert.equal(segs[0].tier, 0);
+  });
+
+  it("Should extend and change tiers without NFTs", async function () {
+    const { support } = await deployBase();
+    const cost = await support.read.cost([0, 1]);
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost });
+    const firstExpiry = await support.read.expiresAt([1n]);
+
+    // Extend same tier
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost });
+    const secondExpiry = await support.read.expiresAt([1n]);
+    assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n);
+
+    // Still only one subscription ID
+    assert.equal(await support.read.totalSupply(), 1n);
+
+    // Upgrade tier
+    await support.write.support([walletClient.account.address, 2, 1], { value: parseEther("1") });
+    const segs = await support.read.segments([1n]);
+    assert.equal(segs.length, 2);
+    assert.equal(segs[1].tier, 2);
+  });
+
+  it("Should track multiple subscribers independently", async function () {
+    const { support } = await deployBase();
+    const cost = await support.read.cost([0, 1]);
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost });
+    await support.write.support([otherWallet.account.address, 1, 1], {
+      value: await support.read.cost([1, 1]),
+      account: otherWallet.account,
+    });
+
+    assert.equal(await support.read.totalSupply(), 2n);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 1n);
+    assert.equal(await support.read.activeToken([otherWallet.account.address]), 2n);
+  });
+
+  it("Should create new subscription ID after expiry", async function () {
+    const { support, priceFeed } = await deployBase();
+    const cost = await support.read.cost([0, 1]);
+
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost });
+    assert.equal(await support.read.totalSupply(), 1n);
+
+    // Fast-forward past expiry and refresh oracle
+    await publicClient.request({ method: "evm_increaseTime" as any, params: [31 * 86400] });
+    await publicClient.request({ method: "evm_mine" as any, params: [] });
+    await priceFeed.write.setPrice([ETH_USD]);
+
+    // New subscription gets a new ID
+    await support.write.support([walletClient.account.address, 0, 1], { value: cost });
+    assert.equal(await support.read.totalSupply(), 2n);
+    assert.equal(await support.read.activeToken([walletClient.account.address]), 2n);
+
+    // Historical subscription preserved
+    assert.equal(await support.read.subscriberOf([1n]), getAddress(walletClient.account.address));
+    assert.equal(await support.read.subscriberOf([2n]), getAddress(walletClient.account.address));
   });
 });
