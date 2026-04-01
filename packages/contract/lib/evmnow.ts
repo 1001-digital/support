@@ -16,7 +16,7 @@ export const logo = [
   '<path d="M9 5H12V8L9 8V5Z" fill="#F8F8F8"/>',
   '<path d="M12 5H15V8H12V5Z" fill="#F8F8F8"/>',
   '<path d="M6 5H9V8H6V5Z" fill="#F8F8F8"/>',
-].join("");
+].join('')
 
 // $10, $69, $250, $1000 (8 decimals)
 export const tierPrices = [
@@ -24,6 +24,6 @@ export const tierPrices = [
   6_900_000_000n,
   25_000_000_000n,
   100_000_000_000n,
-] as const;
+] as const
 
-export const tierNames = ["supporter", "gold", "platinum", "partner"];
+export const tierNames = ['supporter', 'gold', 'platinum', 'partner']

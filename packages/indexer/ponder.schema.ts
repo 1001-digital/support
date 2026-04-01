@@ -1,7 +1,7 @@
-import { index, onchainTable, relations } from "ponder";
+import { index, onchainTable, relations } from 'ponder'
 
 export const supporter = onchainTable(
-  "supporter",
+  'supporter',
   (t) => ({
     address: t.hex().primaryKey(),
     tier: t.integer().notNull(),
@@ -12,10 +12,10 @@ export const supporter = onchainTable(
   (table) => ({
     tierIdx: index().on(table.tier),
   }),
-);
+)
 
 export const subscription = onchainTable(
-  "subscription",
+  'subscription',
   (t) => ({
     tokenId: t.bigint().primaryKey(),
     owner: t.hex().notNull(),
@@ -28,10 +28,10 @@ export const subscription = onchainTable(
     ownerIdx: index().on(table.owner),
     subscriberIdx: index().on(table.subscriber),
   }),
-);
+)
 
 export const supportEvent = onchainTable(
-  "support_event",
+  'support_event',
   (t) => ({
     id: t.text().primaryKey(),
     tokenId: t.bigint().notNull(),
@@ -46,15 +46,15 @@ export const supportEvent = onchainTable(
     tokenIdx: index().on(table.tokenId),
     tierIdx: index().on(table.tier),
   }),
-);
+)
 
 export const subscriptionRelations = relations(subscription, ({ many }) => ({
   events: many(supportEvent),
-}));
+}))
 
 export const supportEventRelations = relations(supportEvent, ({ one }) => ({
   subscription: one(subscription, {
     fields: [supportEvent.tokenId],
     references: [subscription.tokenId],
   }),
-}));
+}))

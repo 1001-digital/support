@@ -1,6 +1,6 @@
-import { createConfig } from "ponder";
+import { createConfig } from 'ponder'
 
-import { SupportAbi } from "./abis/SupportAbi";
+import { SupportAbi } from './abis/SupportAbi'
 
 export default createConfig({
   chains: {
@@ -15,10 +15,10 @@ export default createConfig({
   },
   contracts: {
     Support: {
-      chain: "sepolia",
+      chain: 'sepolia',
       abi: SupportAbi,
       address: process.env.SUPPORT_ADDRESS! as `0x${string}`,
       startBlock: Number(process.env.SUPPORT_START_BLOCK ?? 0),
     },
   },
-});
+})

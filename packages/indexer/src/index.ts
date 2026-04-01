@@ -1,10 +1,10 @@
-import { ponder } from "ponder:registry";
-import { supporter, subscription, supportEvent } from "ponder:schema";
+import { ponder } from 'ponder:registry'
+import { supporter, subscription, supportEvent } from 'ponder:schema'
 
-ponder.on("Support:Transfer", async ({ event, context }) => {
-  const { from, to, tokenId } = event.args;
+ponder.on('Support:Transfer', async ({ event, context }) => {
+  const { from, to, tokenId } = event.args
 
-  if (from === "0x0000000000000000000000000000000000000000") {
+  if (from === '0x0000000000000000000000000000000000000000') {
     await context.db
       .insert(subscription)
       .values({
@@ -15,29 +15,32 @@ ponder.on("Support:Transfer", async ({ event, context }) => {
         expiresAt: 0n,
         totalPaid: 0n,
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
   } else {
-    await context.db
-      .update(subscription, { tokenId })
-      .set({ owner: to });
+    await context.db.update(subscription, { tokenId }).set({ owner: to })
   }
-});
+})
 
-ponder.on("Support:Supported", async ({ event, context }) => {
-  const { supporter: address, tier, tokenId, duration, paid, expiresAt } = event.args;
+ponder.on('Support:Supported', async ({ event, context }) => {
+  const {
+    supporter: address,
+    tier,
+    tokenId,
+    duration,
+    paid,
+    expiresAt,
+  } = event.args
 
-  await context.db
-    .insert(supportEvent)
-    .values({
-      id: `${event.transaction.hash}-${event.log.logIndex}`,
-      tokenId,
-      tier,
-      duration,
-      paid,
-      expiresAt: BigInt(expiresAt),
-      block: event.block.number,
-      timestamp: event.block.timestamp,
-    });
+  await context.db.insert(supportEvent).values({
+    id: `${event.transaction.hash}-${event.log.logIndex}`,
+    tokenId,
+    tier,
+    duration,
+    paid,
+    expiresAt: BigInt(expiresAt),
+    block: event.block.number,
+    timestamp: event.block.timestamp,
+  })
 
   await context.db
     .insert(subscription)
@@ -53,7 +56,7 @@ ponder.on("Support:Supported", async ({ event, context }) => {
       subscriber: address,
       expiresAt: BigInt(expiresAt),
       totalPaid: row.totalPaid + paid,
-    }));
+    }))
 
   // Mark address as supporter with current tier
   await context.db
@@ -70,5 +73,5 @@ ponder.on("Support:Supported", async ({ event, context }) => {
       tokenId,
       expiresAt: BigInt(expiresAt),
       totalPaid: row.totalPaid + paid,
-    }));
-});
+    }))
+})

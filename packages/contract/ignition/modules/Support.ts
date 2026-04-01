@@ -1,16 +1,16 @@
-import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
+import { buildModule } from '@nomicfoundation/hardhat-ignition/modules'
 
-export default buildModule("SupportModule", (m) => {
-  const projectName = m.getParameter("projectName");
-  const projectSymbol = m.getParameter("projectSymbol");
-  const logo = m.getParameter("logo");
-  const priceFeed = m.getParameter("priceFeed");
-  const tierPrices = m.getParameter("tierPrices");
-  const saleStart = m.getParameter("saleStart");
+export default buildModule('SupportModule', (m) => {
+  const projectName = m.getParameter('projectName')
+  const projectSymbol = m.getParameter('projectSymbol')
+  const logo = m.getParameter('logo')
+  const priceFeed = m.getParameter('priceFeed')
+  const tierPrices = m.getParameter('tierPrices')
+  const saleStart = m.getParameter('saleStart')
 
-  const renderer = m.contract("SupportRenderer", []);
+  const renderer = m.contract('SupportRenderer', [])
 
-  const support = m.contract("SupportToken", [
+  const support = m.contract('SupportToken', [
     projectName,
     projectSymbol,
     priceFeed,
@@ -18,7 +18,7 @@ export default buildModule("SupportModule", (m) => {
     saleStart,
     logo,
     renderer,
-  ]);
+  ])
 
-  return { support, renderer };
-});
+  return { support, renderer }
+})

@@ -115,26 +115,26 @@ All three fields are indexed for efficient log filtering by supporter, tier, or 
 
 ### Owner Functions
 
-| Function | Description |
-|---|---|
-| `grant(recipient, tier, duration)` | Grant a free subscription |
-| `setTierPrice(tier, priceUSD)` | Update a tier's monthly USD price |
+| Function                             | Description                                       |
+| ------------------------------------ | ------------------------------------------------- |
+| `grant(recipient, tier, duration)`   | Grant a free subscription                         |
+| `setTierPrice(tier, priceUSD)`       | Update a tier's monthly USD price                 |
 | `setDiscount(minMonths, percentOff)` | Configure bulk discount (e.g. 12 months, 20% off) |
-| `setMaxSlots(tier, max)` | Limit active subscribers per tier (0 = unlimited) |
-| `setProjectName(name)` | Update the project name |
-| `setProjectSymbol(symbol)` | Update the ERC-721 symbol |
-| `setLogo(logo)` | Update the logo SVG content |
-| `withdraw()` | Withdraw all collected ETH |
-| `transferOwnership(newOwner)` | Transfer contract ownership |
+| `setMaxSlots(tier, max)`             | Limit active subscribers per tier (0 = unlimited) |
+| `setProjectName(name)`               | Update the project name                           |
+| `setProjectSymbol(symbol)`           | Update the ERC-721 symbol                         |
+| `setLogo(logo)`                      | Update the logo SVG content                       |
+| `withdraw()`                         | Withdraw all collected ETH                        |
+| `transferOwnership(newOwner)`        | Transfer contract ownership                       |
 
 ## Packages
 
 This is a monorepo managed with [pnpm workspaces](https://pnpm.io/workspaces).
 
-| Package | Description | Status |
-|---|---|---|
-| [`packages/contract`](packages/contract) | Solidity contract, tests, and deployment | Ready |
-| [`packages/indexer`](packages/indexer) | Ponder-based indexer for subscriptions and events | Ready |
+| Package                                  | Description                                       | Status |
+| ---------------------------------------- | ------------------------------------------------- | ------ |
+| [`packages/contract`](packages/contract) | Solidity contract, tests, and deployment          | Ready  |
+| [`packages/indexer`](packages/indexer)   | Ponder-based indexer for subscriptions and events | Ready  |
 
 ### Contract
 
