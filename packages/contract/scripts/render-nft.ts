@@ -36,6 +36,7 @@ async function main() {
   const ETH_USD = 200000000000n // $2,000
 
   const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
+  const renderer = await viem.deployContract('SupportRenderer', [])
   const support = await viem.deployContract('Support', [
     'EVM.NOW',
     'EVMNOW',
@@ -44,6 +45,8 @@ async function main() {
     tierPrices,
     12,
     20,
+    renderer.address,
+    0n,
   ])
 
   await support.write.setMaxSlots([3, 3])

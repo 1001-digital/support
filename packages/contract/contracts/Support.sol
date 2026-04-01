@@ -3,8 +3,7 @@ pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
-import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
+import {ISupportRenderer, Segment} from "./ISupportRenderer.sol";
 
 /**
 *        ·       ·   ·     ·
@@ -38,13 +37,6 @@ contract Support is ERC721, Ownable2Step {
     error InvalidPriceFeed();
     error UnsafeString();
 
-    // --- Types ---
-
-    struct Segment {
-        uint8 tier;
-        uint64 startedAt;
-    }
-
     // --- Events ---
 
     event Supported(
@@ -65,10 +57,12 @@ contract Support is ERC721, Ownable2Step {
     event ProjectNameUpdated(string name);
     event ProjectSymbolUpdated(string symbol);
     event LogoUpdated();
+    event RendererUpdated(address renderer);
 
     // --- State ---
 
     AggregatorV3Interface public priceFeed;
+    ISupportRenderer public renderer;
 
     // Project metadata
     string public projectName;
@@ -105,6 +99,7 @@ contract Support is ERC721, Ownable2Step {
         uint16 _discountMinMonths,
         uint16 _discountPercentOff
     ) ERC721("", "") Ownable(msg.sender) {
+        address _renderer,
         if (_discountPercentOff > 100) revert InvalidDiscount();
         projectName = _projectName;
         projectSymbol = _projectSymbol;
@@ -113,6 +108,7 @@ contract Support is ERC721, Ownable2Step {
         tierPrices = _tierPrices;
         discountMinMonths = _discountMinMonths;
         discountPercentOff = _discountPercentOff;
+        renderer = ISupportRenderer(_renderer);
     }
 
     // --- ERC-721 Overrides ---
@@ -131,15 +127,19 @@ contract Support is ERC721, Ownable2Step {
         (uint8 tier, bool active) = _currentTier(tokenId);
         uint8 displayTier = active ? tier : _lastTier(tokenId);
 
-        string memory svg = _buildSVG(tokenId, displayTier, active);
+        ISupportRenderer.TokenData memory data = ISupportRenderer.TokenData({
+            tokenId: tokenId,
+            subscriber: subscriberOf[tokenId],
+            projectName: projectName,
+            logo: logo,
+            startedAt: startedAt[tokenId],
+            expiresAt: expiresAt[tokenId],
+            displayTier: displayTier,
+            active: active,
+            segments: _segments[tokenId]
+        });
 
-        string memory json = string.concat(
-            '{"name":"', projectName, ' #', Strings.toString(tokenId),
-            '","image":"data:image/svg+xml;base64,', Base64.encode(bytes(svg)),
-            '","attributes":[', _attributes(tokenId, displayTier, active), ']}'
-        );
-
-        return string.concat("data:application/json;base64,", Base64.encode(bytes(json)));
+        return renderer.tokenURI(data);
     }
 
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
@@ -275,6 +275,12 @@ contract Support is ERC721, Ownable2Step {
         emit LogoUpdated();
     }
 
+    /// @notice Update the renderer contract.
+    function setRenderer(address _renderer) external onlyOwner {
+        renderer = ISupportRenderer(_renderer);
+        emit RendererUpdated(_renderer);
+    }
+
     /// @notice Withdraw all collected ETH.
     function withdraw() external onlyOwner {
         uint256 balance = address(this).balance;
@@ -403,75 +409,6 @@ contract Support is ERC721, Ownable2Step {
         return segs[segs.length - 1].tier;
     }
 
-    // --- Metadata ---
-
-    function _buildSVG(uint256 tokenId, uint8 displayTier, bool active) internal view returns (string memory) {
-        uint64 start = startedAt[tokenId];
-        uint256 dayNum = (block.timestamp - start) / 1 days + 1;
-        uint256 dur = active
-            ? (block.timestamp - start) / 1 days
-            : (expiresAt[tokenId] - start) / 1 days;
-
-        return string.concat(
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
-            '<rect width="400" height="400" fill="white"/>'
-            '<style>.l{font-family:monospace;fill:#666;text-transform:uppercase;font-size:10px;font-weight:500}</style>'
-            '<text class="l" x="20" y="30">', projectName, ' SUPPORTERS</text>'
-            '<text class="l" x="380" y="30" text-anchor="end">', _displayName(subscriberOf[tokenId]), '</text>',
-            _badge(displayTier),
-            '<text class="l" x="20" y="380">DAY ', Strings.toString(dayNum), '</text>'
-            '<text class="l" x="200" y="380" text-anchor="middle">', active ? 'ACTIVE' : 'EXPIRED', '</text>'
-            '<text class="l" x="380" y="380" text-anchor="end">', Strings.toString(dur), 'D</text>'
-            '</svg>'
-        );
-    }
-
-    /// @dev Builds the center badge: rounded rect, logo left, tier name right.
-    function _badge(uint8 tier) internal view returns (string memory) {
-        string memory bg;
-        string memory tc;
-        string memory t;
-        uint256 w;
-
-        if (tier == 0)      { bg = '#DCDCDC'; tc = '#484848'; t = 'SUPPORTER'; w = 120; }
-        else if (tier == 1) { bg = '#A29C7A'; tc = '#fff';    t = 'GOLD';      w = 81;  }
-        else if (tier == 2) { bg = '#8B8F9A'; tc = '#fff';    t = 'PLATINUM';  w = 109; }
-        else                { bg = '#000';    tc = '#fff';    t = 'PARTNER';   w = 102; }
-
-        uint256 x = (400 - w) / 2;
-        uint256 textX = 26 + (w - 26) / 2; // center text in area right of logo
-
-        return string.concat(
-            '<g transform="translate(', Strings.toString(x), ',184)">',
-            '<rect width="', Strings.toString(w), '" height="32" rx="3" fill="', bg, '"/>',
-            '<g transform="translate(3,3)">', logo, '</g>',
-            '<text x="', Strings.toString(textX), '" y="20" text-anchor="middle" font-family="monospace" font-size="12" font-weight="bold" fill="', tc, '">', t, '</text>',
-            '</g>'
-        );
-    }
-
-    function _attributes(uint256 tokenId, uint8 displayTier, bool active) internal view returns (string memory) {
-        string memory attrs = string.concat(
-            '{"trait_type":"Status","value":"', active ? 'Active' : 'Expired', '"},',
-            '{"trait_type":"Tier","value":', Strings.toString(displayTier), '},',
-            '{"trait_type":"Started At","display_type":"date","value":', Strings.toString(uint256(startedAt[tokenId])), '},',
-            '{"trait_type":"Expires At","display_type":"date","value":', Strings.toString(uint256(expiresAt[tokenId])), '}'
-        );
-
-        Segment[] storage segs = _segments[tokenId];
-        for (uint256 i; i < segs.length; ++i) {
-            uint64 segEnd = i + 1 < segs.length ? segs[i + 1].startedAt : expiresAt[tokenId];
-            attrs = string.concat(
-                attrs,
-                ',{"trait_type":"Segment ', Strings.toString(i + 1),
-                '","value":"Tier ', Strings.toString(segs[i].tier),
-                ', ', Strings.toString((segEnd - segs[i].startedAt) / 1 days), 'd"}'
-            );
-        }
-
-        return attrs;
-    }
-
     // --- Pricing ---
 
     function _discountedUSD(uint8 tier, uint32 duration) internal view returns (uint256) {
@@ -508,79 +445,5 @@ contract Support is ERC721, Ownable2Step {
         }
     }
 
-    // --- ENS ---
 
-    /// @dev namehash("addr.reverse")
-    bytes32 internal constant ADDR_REVERSE_NODE = 0x91d1777781884d03a6757a803996e38de2a42967fb37eeaca72729271025a9e2;
-
-    address internal constant ENS_REGISTRY = 0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e;
-
-    /// @dev Try ENS reverse resolution, fall back to short hex.
-    function _displayName(address addr) internal view returns (string memory) {
-        if (ENS_REGISTRY.code.length == 0) return _shortHex(addr);
-
-        bytes32 node = keccak256(abi.encodePacked(ADDR_REVERSE_NODE, _sha3Hex(addr)));
-
-        try IENS(ENS_REGISTRY).resolver(node) returns (address resolver) {
-            if (resolver != address(0) && resolver.code.length > 0) {
-                try IENSResolver(resolver).name(node) returns (string memory ensName) {
-                    if (bytes(ensName).length > 0) return ensName;
-                } catch {}
-            }
-        } catch {}
-
-        return _shortHex(addr);
-    }
-
-    /// @dev keccak256 of the lowercase hex representation of an address (no 0x prefix).
-    function _sha3Hex(address addr) internal pure returns (bytes32) {
-        bytes memory result = new bytes(40);
-        uint160 val = uint160(addr);
-        unchecked {
-            for (uint256 i = 40; i > 0; --i) {
-                result[i - 1] = _HEX_LOWER[val & 0xf];
-                val >>= 4;
-            }
-        }
-        return keccak256(result);
-    }
-
-    bytes internal constant _HEX_LOWER = "0123456789abcdef";
-    bytes internal constant _HEX = "0123456789ABCDEF";
-
-    /// @dev Returns "0x1234...5678" (6 prefix + 4 suffix).
-    function _shortHex(address addr) internal pure returns (string memory) {
-        bytes memory full = new bytes(40);
-        uint160 val = uint160(addr);
-        unchecked {
-            for (uint256 i = 40; i > 0; --i) {
-                full[i - 1] = _HEX[val & 0xf];
-                val >>= 4;
-            }
-        }
-        return string.concat(
-            "0x", string(abi.encodePacked(full[0], full[1], full[2], full[3])),
-            "...",
-            string(abi.encodePacked(full[36], full[37], full[38], full[39]))
-        );
-    }
-
-}
-
-interface IENS {
-    function resolver(bytes32 node) external view returns (address);
-}
-
-interface IENSResolver {
-    function name(bytes32 node) external view returns (string memory);
-}
-
-interface AggregatorV3Interface {
-    function latestRoundData() external view returns (
-        uint80 roundId,
-        int256 answer,
-        uint256 startedAt,
-        uint256 updatedAt,
-        uint80 answeredInRound
-    );
 }

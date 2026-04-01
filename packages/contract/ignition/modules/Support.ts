@@ -8,6 +8,7 @@ export default buildModule("SupportModule", (m) => {
   const tierPrices = m.getParameter("tierPrices");
   const discountMinMonths = m.getParameter("discountMinMonths");
   const discountPercentOff = m.getParameter("discountPercentOff");
+  const renderer = m.contract("SupportRenderer", []);
 
   const support = m.contract("Support", [
     projectName,
@@ -17,7 +18,8 @@ export default buildModule("SupportModule", (m) => {
     tierPrices,
     discountMinMonths,
     discountPercentOff,
+    renderer,
   ]);
 
-  return { support };
+  return { support, renderer };
 });
