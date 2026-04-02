@@ -59,12 +59,14 @@ ponder.on('Support:Supported', async ({ event, context }) => {
     }))
 
   // Mark address as supporter with current tier
+  const startedAt = BigInt(expiresAt) - BigInt(duration) * 2592000n
   await context.db
     .insert(supporter)
     .values({
       address,
       tier,
       tokenId,
+      startedAt,
       expiresAt: BigInt(expiresAt),
       totalPaid: paid,
     })

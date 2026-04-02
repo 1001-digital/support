@@ -6,6 +6,7 @@ export const supporter = onchainTable(
     address: t.hex().primaryKey(),
     tier: t.integer().notNull(),
     tokenId: t.bigint().notNull(),
+    startedAt: t.bigint().notNull(),
     expiresAt: t.bigint().notNull(),
     totalPaid: t.bigint().notNull(),
   }),
