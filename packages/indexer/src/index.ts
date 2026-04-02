@@ -38,8 +38,8 @@ ponder.on('Support:Supported', async ({ event, context }) => {
     tier,
     duration,
     paid,
-    startedAt: BigInt(startedAt),
-    expiresAt: BigInt(expiresAt),
+    startedAt,
+    expiresAt,
     block: event.block.number,
     timestamp: event.block.timestamp,
   })
@@ -50,13 +50,13 @@ ponder.on('Support:Supported', async ({ event, context }) => {
       subscriptionId,
       owner: address,
       subscriber: address,
-      startedAt: BigInt(startedAt),
-      expiresAt: BigInt(expiresAt),
+      startedAt,
+      expiresAt,
       totalPaid: paid,
     })
     .onConflictDoUpdate((row) => ({
       subscriber: address,
-      expiresAt: BigInt(expiresAt),
+      expiresAt,
       totalPaid: row.totalPaid + paid,
     }))
 
@@ -66,14 +66,14 @@ ponder.on('Support:Supported', async ({ event, context }) => {
       address,
       tier,
       subscriptionId,
-      startedAt: BigInt(startedAt),
-      expiresAt: BigInt(expiresAt),
+      startedAt,
+      expiresAt,
       totalPaid: paid,
     })
     .onConflictDoUpdate((row) => ({
       tier,
       subscriptionId,
-      expiresAt: BigInt(expiresAt),
+      expiresAt,
       totalPaid: row.totalPaid + paid,
     }))
 })
