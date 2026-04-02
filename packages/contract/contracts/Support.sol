@@ -33,6 +33,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     error TransferFailed();
     error NothingToWithdraw();
     error TierChangeForbidden();
+    error InvalidPrice();
 
     // --- Events ---
 
@@ -87,6 +88,9 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ) Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
         projectName = _projectName;
         projectSymbol = _projectSymbol;
+        for (uint8 i = 0; i < 4; i++) {
+            if (_tierPrices[i] == 0) revert InvalidPrice();
+        }
         tierPrices = _tierPrices;
     }
 
@@ -209,6 +213,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     /// @notice Update a tier's monthly USD price.
     function setTierPrice(uint8 tier, uint128 priceUSD) external onlyOwner {
         if (tier >= 4) revert InvalidTier();
+        if (priceUSD == 0) revert InvalidPrice();
         tierPrices[tier] = priceUSD;
         emit TierPriceUpdated(tier, priceUSD);
     }
@@ -280,9 +285,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
         required = _baseCost(adj.adjustedUSD);
 
-        uint256 converted = newPrice == 0
-            ? uint256(remaining)
-            : uint256(remaining) * oldPrice / newPrice;
+        uint256 converted = uint256(remaining) * oldPrice / newPrice;
         uint256 rawExpiry = uint256(block.timestamp) + converted + uint256(adj.adjustedDuration) * 30 days;
 
         // Upgrading must result in at least 30 days from now.

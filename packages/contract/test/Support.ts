@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
 import { network } from 'hardhat'
-import { getAddress, parseEther } from 'viem'
+import { getAddress, parseEther, zeroAddress } from 'viem'
 
 const { viem } = await network.connect()
 const publicClient = await viem.getPublicClient()
@@ -300,26 +300,13 @@ describe('Support', async function () {
     assert.equal(segs.length, 2)
   })
 
-  it('Should handle downgrade to free tier', async function () {
-    const { support, hook } = await deploy()
+  it('Should reject setting tier price to zero', async function () {
+    const { support } = await deploy()
 
-    await support.write.setTierPrice([0, 0n]) // tier 0 = free
-
-    // Subscribe tier 2 for 1 month
-    await support.write.support([walletClient.account.address, 2, 1], {
-      value: await readCost(support, [2, 1]),
-    })
-
-    const expiryBefore = await support.read.expiresAt([1n])
-
-    // Downgrade to free tier — remaining time stays 1:1
-    await support.write.support([walletClient.account.address, 0, 1], {
-      value: 0n,
-    })
-
-    const expiryAfter = await support.read.expiresAt([1n])
-    // Should have added 30 days but remaining time stays approximately the same
-    assert.ok(expiryAfter > expiryBefore)
+    await assert.rejects(
+      support.write.setTierPrice([0, 0n]),
+      /InvalidPrice/,
+    )
   })
 
   // --- Subscription expiry + new NFT ---
@@ -2162,61 +2149,23 @@ describe('Support', async function () {
     )
   })
 
-  // --- Free tier mass registration ---
+  // --- Invalid price ---
 
-  it('Should allow mass registration at free tier (tierPrice = 0)', async function () {
-    const wallets = await viem.getWalletClients()
-    const { support, hook } = await deploy()
+  it('Should reject deployment with zero tier price', async function () {
+    const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
 
-    await support.write.setTierPrice([0, 0n])
-    assert.equal(await readCost(support, [0, 1]), 0n)
-
-    for (let i = 0; i < Math.min(wallets.length, 5); i++) {
-      await support.write.support([wallets[i].account.address, 0, 1], {
-        value: 0n,
-        account: wallets[i].account,
-      })
-    }
-
-    const count = Math.min(wallets.length, 5)
-    assert.equal(await support.read.totalSupply(), BigInt(count))
-
-    for (let i = 0; i < count; i++) {
-      const tokenId = await support.read.activeToken([
-        wallets[i].account.address,
-      ])
-      assert.ok(tokenId > 0n)
-      const [tier, active] = await support.read.currentTier([tokenId])
-      assert.equal(tier, 0)
-      assert.equal(active, true)
-    }
-  })
-
-  it('Should allow free tier extension and upgrade', async function () {
-    const { support, hook } = await deploy()
-
-    await support.write.setTierPrice([0, 0n])
-
-    await support.write.support([walletClient.account.address, 0, 3], {
-      value: 0n,
-    })
-    const firstExpiry = await support.read.expiresAt([1n])
-
-    await support.write.support([walletClient.account.address, 0, 3], {
-      value: 0n,
-    })
-    const secondExpiry = await support.read.expiresAt([1n])
-    assert.equal(secondExpiry, firstExpiry + 3n * 30n * 24n * 60n * 60n)
-
-    // Upgrade from free to paid tier
-    await support.write.support([walletClient.account.address, 2, 1], {
-      value: parseEther('1'),
-    })
-    const [tier] = await support.read.currentTier([1n])
-    assert.equal(tier, 2)
-
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 2)
+    await assert.rejects(
+      viem.deployContract('SupportToken', [
+        'TestProject',
+        'TEST',
+        priceFeed.address,
+        [0n, 1000000000n, 2500000000n, 10000000000n],
+        0n,
+        '',
+        zeroAddress,
+      ]),
+      /InvalidPrice/,
+    )
   })
 })
 
