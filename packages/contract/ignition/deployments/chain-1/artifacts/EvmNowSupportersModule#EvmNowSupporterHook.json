@@ -1,0 +1,287 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "EvmNowSupporterHook",
+  "sourceName": "contracts/hooks/EvmNowSupporterHook.sol",
+  "abi": [
+    {
+      "inputs": [],
+      "stateMutability": "nonpayable",
+      "type": "constructor"
+    },
+    {
+      "inputs": [],
+      "name": "InvalidDiscount",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "owner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableInvalidOwner",
+      "type": "error"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "account",
+          "type": "address"
+        }
+      ],
+      "name": "OwnableUnauthorizedAccount",
+      "type": "error"
+    },
+    {
+      "inputs": [],
+      "name": "SubscriptionBlocked",
+      "type": "error"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": false,
+          "internalType": "uint16",
+          "name": "minMonths",
+          "type": "uint16"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint16",
+          "name": "percentOff",
+          "type": "uint16"
+        }
+      ],
+      "name": "DiscountUpdated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "previousOwner",
+          "type": "address"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "OwnershipTransferred",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "tier",
+          "type": "uint8"
+        },
+        {
+          "internalType": "uint32",
+          "name": "duration",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "baseUSD",
+          "type": "uint256"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        },
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        },
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        }
+      ],
+      "name": "beforeSubscribe",
+      "outputs": [
+        {
+          "components": [
+            {
+              "internalType": "uint256",
+              "name": "adjustedUSD",
+              "type": "uint256"
+            },
+            {
+              "internalType": "uint32",
+              "name": "adjustedDuration",
+              "type": "uint32"
+            },
+            {
+              "internalType": "uint64",
+              "name": "adjustedStart",
+              "type": "uint64"
+            }
+          ],
+          "internalType": "struct ISubscriptionHook.Adjustments",
+          "name": "adj",
+          "type": "tuple"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "tier",
+          "type": "uint8"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "canSubscribe",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "pure",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "minMonths",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "onRelease",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint8",
+          "name": "",
+          "type": "uint8"
+        },
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "name": "onSubscribe",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "owner",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "",
+          "type": "address"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "percentOff",
+      "outputs": [
+        {
+          "internalType": "uint16",
+          "name": "",
+          "type": "uint16"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "renounceOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "uint16",
+          "name": "_minMonths",
+          "type": "uint16"
+        },
+        {
+          "internalType": "uint16",
+          "name": "_percentOff",
+          "type": "uint16"
+        }
+      ],
+      "name": "setDiscount",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "newOwner",
+          "type": "address"
+        }
+      ],
+      "name": "transferOwnership",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x6080806040523460875733156074575f543360018060a01b0382167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e05f80a36001600160b01b0319163361ffff60a01b191617600360a21b1761ffff60b01b1916600560b21b175f556104f7908161008c8239f35b631e4fbdf760e01b5f525f60045260245ffd5b5f80fdfe6080806040526004361015610012575f80fd5b5f3560e01c908163021ae814146103b35781631bbae084146103b8575080636f1fdb53146103b3578063715018a61461035c57806384f419ce146103395780638da5cb5b14610312578063aab0dd35146101e4578063bc0ef897146101c1578063d27c100e146101175763f2fde38b1461008a575f80fd5b34610113576020366003190112610113576004356001600160a01b03811690819003610113576100b861049b565b8015610100575f80546001600160a01b03198116831782556001600160a01b0316907f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09080a3005b631e4fbdf760e01b5f525f60045260245ffd5b5f80fd5b346101135760403660031901126101135760043561ffff8116808203610113576024359061ffff82168083036101135761014f61049b565b606481116101b2577f7911a491008cd3ec0a37c2dc1e8126a43148a9df8ebf446214749c816f3d3fc1936040935f549061ffff60b01b9060b01b169161ffff60a01b9060a01b169063ffffffff60a01b191617175f5582519182526020820152a1005b6304cbf51b60e51b5f5260045ffd5b34610113575f36600319011261011357602061ffff5f5460b01c16604051908152f35b346101135760c0366003190112610113576101fd6103e8565b60243563ffffffff8116809103610113576044359161021a61041e565b50608435801515036101135760ff6003916102336103f8565b5061023c610458565b5016146103035761024b610458565b60208101918083525f549061ffff8260a01c168091101590816102f9575b50156102de5761ffff9060b01c1660640361ffff81116102ca5761ffff16928381029381850414901517156102ca57604067ffffffffffffffff9163ffffffff606460609604945b8583528351958652511660208501520151166040820152f35b634e487b7160e01b5f52601160045260245ffd5b50604067ffffffffffffffff9163ffffffff606095946102b1565b9050151585610269565b6342d42fcb60e11b5f5260045ffd5b34610113575f366003190112610113575f546040516001600160a01b039091168152602090f35b34610113575f36600319011261011357602061ffff5f5460a01c16604051908152f35b34610113575f3660031901126101135761037461049b565b5f80546001600160a01b0319811682556001600160a01b03167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e08280a3005b610434565b3461011357604036600319011261011357602090600360ff6103d86103e8565b6103e0610408565b501614158152f35b6004359060ff8216820361011357565b60a4359060ff8216820361011357565b602435906001600160a01b038216820361011357565b606435906001600160a01b038216820361011357565b346101135760403660031901126101135761044d6103e8565b50610456610408565b005b604051906060820182811067ffffffffffffffff821117610487576040525f6040838281528260208201520152565b634e487b7160e01b5f52604160045260245ffd5b5f546001600160a01b031633036104ae57565b63118cdaa760e01b5f523360045260245ffdfea264697066735822122029a71c40dc37b8d525ff59c2bebdb528e58bcbc4983ba173179eb57033d6719164736f6c634300081c0033",
+  "deployedBytecode": "0x6080806040526004361015610012575f80fd5b5f3560e01c908163021ae814146103b35781631bbae084146103b8575080636f1fdb53146103b3578063715018a61461035c57806384f419ce146103395780638da5cb5b14610312578063aab0dd35146101e4578063bc0ef897146101c1578063d27c100e146101175763f2fde38b1461008a575f80fd5b34610113576020366003190112610113576004356001600160a01b03811690819003610113576100b861049b565b8015610100575f80546001600160a01b03198116831782556001600160a01b0316907f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e09080a3005b631e4fbdf760e01b5f525f60045260245ffd5b5f80fd5b346101135760403660031901126101135760043561ffff8116808203610113576024359061ffff82168083036101135761014f61049b565b606481116101b2577f7911a491008cd3ec0a37c2dc1e8126a43148a9df8ebf446214749c816f3d3fc1936040935f549061ffff60b01b9060b01b169161ffff60a01b9060a01b169063ffffffff60a01b191617175f5582519182526020820152a1005b6304cbf51b60e51b5f5260045ffd5b34610113575f36600319011261011357602061ffff5f5460b01c16604051908152f35b346101135760c0366003190112610113576101fd6103e8565b60243563ffffffff8116809103610113576044359161021a61041e565b50608435801515036101135760ff6003916102336103f8565b5061023c610458565b5016146103035761024b610458565b60208101918083525f549061ffff8260a01c168091101590816102f9575b50156102de5761ffff9060b01c1660640361ffff81116102ca5761ffff16928381029381850414901517156102ca57604067ffffffffffffffff9163ffffffff606460609604945b8583528351958652511660208501520151166040820152f35b634e487b7160e01b5f52601160045260245ffd5b50604067ffffffffffffffff9163ffffffff606095946102b1565b9050151585610269565b6342d42fcb60e11b5f5260045ffd5b34610113575f366003190112610113575f546040516001600160a01b039091168152602090f35b34610113575f36600319011261011357602061ffff5f5460a01c16604051908152f35b34610113575f3660031901126101135761037461049b565b5f80546001600160a01b0319811682556001600160a01b03167f8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e08280a3005b610434565b3461011357604036600319011261011357602090600360ff6103d86103e8565b6103e0610408565b501614158152f35b6004359060ff8216820361011357565b60a4359060ff8216820361011357565b602435906001600160a01b038216820361011357565b606435906001600160a01b038216820361011357565b346101135760403660031901126101135761044d6103e8565b50610456610408565b005b604051906060820182811067ffffffffffffffff821117610487576040525f6040838281528260208201520152565b634e487b7160e01b5f52604160045260245ffd5b5f546001600160a01b031633036104ae57565b63118cdaa760e01b5f523360045260245ffdfea264697066735822122029a71c40dc37b8d525ff59c2bebdb528e58bcbc4983ba173179eb57033d6719164736f6c634300081c0033",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/hooks/EvmNowSupporterHook.sol",
+  "buildInfoId": "solc-0_8_28-d942cd343313d9705ae21c2050b7d5077b6911ee"
+}

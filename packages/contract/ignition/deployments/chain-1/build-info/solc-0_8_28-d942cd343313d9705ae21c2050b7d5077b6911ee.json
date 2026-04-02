@@ -1,0 +1,54 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_28-d942cd343313d9705ae21c2050b7d5077b6911ee",
+  "solcVersion": "0.8.28",
+  "solcLongVersion": "0.8.28+commit.7893614a",
+  "userSourceNameMap": {
+    "contracts/hooks/EvmNowSupporterHook.sol": "project/contracts/hooks/EvmNowSupporterHook.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "cancun",
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "evm.methodIdentifiers",
+            "metadata"
+          ]
+        }
+      },
+      "remappings": [
+        "project/:@openzeppelin/contracts/=npm/@openzeppelin/contracts@5.6.1/"
+      ],
+      "viaIR": true
+    },
+    "sources": {
+      "npm/@openzeppelin/contracts@5.6.1/access/Ownable.sol": {
+        "content": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.0) (access/Ownable.sol)\n\npragma solidity ^0.8.20;\n\nimport {Context} from \"../utils/Context.sol\";\n\n/**\n * @dev Contract module which provides a basic access control mechanism, where\n * there is an account (an owner) that can be granted exclusive access to\n * specific functions.\n *\n * The initial owner is set to the address provided by the deployer. This can\n * later be changed with {transferOwnership}.\n *\n * This module is used through inheritance. It will make available the modifier\n * `onlyOwner`, which can be applied to your functions to restrict their use to\n * the owner.\n */\nabstract contract Ownable is Context {\n    address private _owner;\n\n    /**\n     * @dev The caller account is not authorized to perform an operation.\n     */\n    error OwnableUnauthorizedAccount(address account);\n\n    /**\n     * @dev The owner is not a valid owner account. (eg. `address(0)`)\n     */\n    error OwnableInvalidOwner(address owner);\n\n    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);\n\n    /**\n     * @dev Initializes the contract setting the address provided by the deployer as the initial owner.\n     */\n    constructor(address initialOwner) {\n        if (initialOwner == address(0)) {\n            revert OwnableInvalidOwner(address(0));\n        }\n        _transferOwnership(initialOwner);\n    }\n\n    /**\n     * @dev Throws if called by any account other than the owner.\n     */\n    modifier onlyOwner() {\n        _checkOwner();\n        _;\n    }\n\n    /**\n     * @dev Returns the address of the current owner.\n     */\n    function owner() public view virtual returns (address) {\n        return _owner;\n    }\n\n    /**\n     * @dev Throws if the sender is not the owner.\n     */\n    function _checkOwner() internal view virtual {\n        if (owner() != _msgSender()) {\n            revert OwnableUnauthorizedAccount(_msgSender());\n        }\n    }\n\n    /**\n     * @dev Leaves the contract without owner. It will not be possible to call\n     * `onlyOwner` functions. Can only be called by the current owner.\n     *\n     * NOTE: Renouncing ownership will leave the contract without an owner,\n     * thereby disabling any functionality that is only available to the owner.\n     */\n    function renounceOwnership() public virtual onlyOwner {\n        _transferOwnership(address(0));\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\n     * Can only be called by the current owner.\n     */\n    function transferOwnership(address newOwner) public virtual onlyOwner {\n        if (newOwner == address(0)) {\n            revert OwnableInvalidOwner(address(0));\n        }\n        _transferOwnership(newOwner);\n    }\n\n    /**\n     * @dev Transfers ownership of the contract to a new account (`newOwner`).\n     * Internal function without access restriction.\n     */\n    function _transferOwnership(address newOwner) internal virtual {\n        address oldOwner = _owner;\n        _owner = newOwner;\n        emit OwnershipTransferred(oldOwner, newOwner);\n    }\n}\n"
+      },
+      "npm/@openzeppelin/contracts@5.6.1/utils/Context.sol": {
+        "content": "// SPDX-License-Identifier: MIT\n// OpenZeppelin Contracts (last updated v5.0.1) (utils/Context.sol)\n\npragma solidity ^0.8.20;\n\n/**\n * @dev Provides information about the current execution context, including the\n * sender of the transaction and its data. While these are generally available\n * via msg.sender and msg.data, they should not be accessed in such a direct\n * manner, since when dealing with meta-transactions the account sending and\n * paying for execution may not be the actual sender (as far as an application\n * is concerned).\n *\n * This contract is only required for intermediate, library-like contracts.\n */\nabstract contract Context {\n    function _msgSender() internal view virtual returns (address) {\n        return msg.sender;\n    }\n\n    function _msgData() internal view virtual returns (bytes calldata) {\n        return msg.data;\n    }\n\n    function _contextSuffixLength() internal view virtual returns (uint256) {\n        return 0;\n    }\n}\n"
+      },
+      "project/contracts/hooks/DiscountHook.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.28;\n\nimport {Ownable} from \"@openzeppelin/contracts/access/Ownable.sol\";\nimport {ISubscriptionHook} from \"../interfaces/ISubscriptionHook.sol\";\n\n/// @title DiscountHook\n/// @notice Applies a percentage discount when duration meets a minimum threshold.\ncontract DiscountHook is ISubscriptionHook, Ownable {\n\n    error InvalidDiscount();\n\n    event DiscountUpdated(uint16 minMonths, uint16 percentOff);\n\n    uint16 public minMonths;\n    uint16 public percentOff;\n\n    constructor(uint16 _minMonths, uint16 _percentOff) Ownable(msg.sender) {\n        if (_percentOff > 100) revert InvalidDiscount();\n        minMonths = _minMonths;\n        percentOff = _percentOff;\n    }\n\n    function beforeSubscribe(\n        uint8, uint32 duration, uint256 baseUSD, address, bool, uint8\n    ) external view virtual override returns (Adjustments memory adj) {\n        return _applyDiscount(duration, baseUSD);\n    }\n\n    function _applyDiscount(uint32 duration, uint256 baseUSD) internal view returns (Adjustments memory adj) {\n        adj.adjustedDuration = duration;\n        adj.adjustedUSD = (duration >= minMonths && minMonths > 0)\n            ? baseUSD * (100 - percentOff) / 100\n            : baseUSD;\n    }\n\n    function canSubscribe(uint8, address) external pure virtual override returns (bool) {\n        return true;\n    }\n\n    function onSubscribe(uint8, address) external virtual override {}\n    function onRelease(uint8, address) external virtual override {}\n\n    function setDiscount(uint16 _minMonths, uint16 _percentOff) external onlyOwner {\n        if (_percentOff > 100) revert InvalidDiscount();\n        minMonths = _minMonths;\n        percentOff = _percentOff;\n        emit DiscountUpdated(_minMonths, _percentOff);\n    }\n}\n"
+      },
+      "project/contracts/hooks/EvmNowSupporterHook.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.28;\n\nimport {DiscountHook} from \"./DiscountHook.sol\";\n\n/// @title EvmNowSupporterHook\n/// @notice Custom hook for EVM.NOW: 20% discount for 12+ months, Partner tier is grant-only.\ncontract EvmNowSupporterHook is DiscountHook {\n\n    uint8 private constant PARTNER_TIER = 3;\n\n    constructor() DiscountHook(12, 20) {}\n\n    function beforeSubscribe(\n        uint8 tier, uint32 duration, uint256 baseUSD, address, bool, uint8\n    ) external view override returns (Adjustments memory adj) {\n        if (tier == PARTNER_TIER) revert SubscriptionBlocked();\n        return _applyDiscount(duration, baseUSD);\n    }\n\n    function canSubscribe(uint8 tier, address) external pure override returns (bool) {\n        return tier != PARTNER_TIER;\n    }\n}\n"
+      },
+      "project/contracts/interfaces/ISubscriptionHook.sol": {
+        "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.28;\n\ninterface ISubscriptionHook {\n    /// @notice Revert with this to block a subscription in beforeSubscribe.\n    error SubscriptionBlocked();\n\n    /// @notice Adjustments returned by beforeSubscribe.\n    struct Adjustments {\n        uint256 adjustedUSD;      // Final USD cost\n        uint32  adjustedDuration; // Duration in months after adjustment\n        uint64  adjustedStart;    // Start timestamp for new subs (0 = use block.timestamp)\n    }\n\n    /// @notice Called before a subscription is applied. Returns adjusted parameters.\n    /// @param tier          The target tier\n    /// @param duration      Requested duration in months\n    /// @param baseUSD       Raw tierPrice * duration before adjustments\n    /// @param supporter    The address being subscribed (address(0) for generic estimates)\n    /// @param isNew         true if this is a brand new subscription\n    /// @param previousTier  The supporter's current tier (NO_TIER if none)\n    /// @return adj The adjusted subscription parameters\n    function beforeSubscribe(\n        uint8   tier,\n        uint32  duration,\n        uint256 baseUSD,\n        address supporter,\n        bool    isNew,\n        uint8   previousTier\n    ) external view returns (Adjustments memory adj);\n\n    /// @notice Check whether a subscription is allowed (for off-chain estimation).\n    function canSubscribe(uint8 tier, address supporter) external view returns (bool);\n\n    /// @notice Called after a subscription is applied. Revert to block it.\n    function onSubscribe(uint8 tier, address supporter) external;\n\n    /// @notice Called when a supporter leaves a tier (upgrade, downgrade, or transfer).\n    function onRelease(uint8 tier, address supporter) external;\n}\n"
+      }
+    }
+  }
+}
