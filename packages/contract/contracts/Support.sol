@@ -43,6 +43,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint256 indexed tokenId,
         uint32 duration,
         uint256 paid,
+        uint64 startedAt,
         uint64 expiresAt
     );
 
@@ -148,7 +149,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         tokenId = _applySubscription(recipient, tokenId, tier, newExpiry, start);
         _notifyHook(h, previousTier, tier, recipient);
         _afterSubscriptionChange(tokenId);
-        emit Supported(recipient, tier, tokenId, duration, required, newExpiry);
+        emit Supported(recipient, tier, tokenId, duration, required, startedAt[tokenId], newExpiry);
 
         uint256 excess = msg.value - required;
         if (excess > 0) {
@@ -173,7 +174,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         tokenId = _applySubscription(recipient, tokenId, tier, newExpiry, start);
         _notifyHook(hook, previousTier, tier, recipient);
         _afterSubscriptionChange(tokenId);
-        emit Supported(recipient, tier, tokenId, duration, 0, newExpiry);
+        emit Supported(recipient, tier, tokenId, duration, 0, startedAt[tokenId], newExpiry);
     }
 
     /// @notice Get cost and adjusted duration for a tier and duration.
