@@ -34,7 +34,7 @@ builder:
 env:
   clear:
     PONDER_TELEMETRY_DISABLED: "true"
-    SUPPORT_ADDRESS: <%= ENV["SUPPORT_ADDRESS"] %>
+    SUPPORT_ADDRESS: "<%= ENV["SUPPORT_ADDRESS"] %>"
     SUPPORT_START_BLOCK: <%= ENV["SUPPORT_START_BLOCK"] %>
   secret:
     - PONDER_RPC_URL_1
