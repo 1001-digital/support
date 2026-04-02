@@ -26,22 +26,16 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
     // --- Constructor ---
 
     constructor(
+        string memory _name,
+        string memory _symbol,
         string memory _logo,
         address _renderer
-    ) ERC721("", "") {
+    ) ERC721(_name, _symbol) {
         logo = _logo;
         renderer = ISupportRenderer(_renderer);
     }
 
     // --- ERC-721 Overrides ---
-
-    function name() public view override returns (string memory) {
-        return projectName;
-    }
-
-    function symbol() public view override returns (string memory) {
-        return projectSymbol;
-    }
 
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         address owner = _requireOwned(tokenId);
@@ -52,7 +46,7 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
         ISupportRenderer.TokenData memory data = ISupportRenderer.TokenData({
             tokenId: tokenId,
             subscriber: owner,
-            projectName: projectName,
+            projectName: name(),
             logo: logo,
             startedAt: startedAt[tokenId],
             expiresAt: expiresAt[tokenId],

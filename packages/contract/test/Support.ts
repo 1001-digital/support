@@ -2186,8 +2186,6 @@ describe('BaseSupport', async function () {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
     const support = await viem.deployContract('MockSupport', [
       walletClient.account.address,
-      'TestProject',
-      'TEST',
       priceFeed.address,
       tierPrices,
       0n,

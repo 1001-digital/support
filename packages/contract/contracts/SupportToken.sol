@@ -17,8 +17,8 @@ contract SupportToken is WithSupportTokens {
         uint256 _saleStart,
         string memory _logo,
         address _renderer
-    ) Support(_initialOwner, _projectName, _projectSymbol, _priceFeed, _tierPrices, _saleStart)
-      WithSupportTokens(_logo, _renderer)
+    ) Support(_initialOwner, _priceFeed, _tierPrices, _saleStart)
+      WithSupportTokens(_projectName, _projectSymbol, _logo, _renderer)
     {}
 
 }

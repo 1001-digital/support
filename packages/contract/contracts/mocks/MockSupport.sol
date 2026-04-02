@@ -7,10 +7,8 @@ import {Support} from "../Support.sol";
 contract MockSupport is Support {
     constructor(
         address _initialOwner,
-        string memory _projectName,
-        string memory _projectSymbol,
         address _priceFeed,
         uint128[] memory _tierPrices,
         uint256 _saleStart
-    ) Support(_initialOwner, _projectName, _projectSymbol, _priceFeed, _tierPrices, _saleStart) {}
+    ) Support(_initialOwner, _priceFeed, _tierPrices, _saleStart) {}
 }

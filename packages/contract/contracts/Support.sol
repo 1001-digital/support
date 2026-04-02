@@ -49,18 +49,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     event TierPriceUpdated(uint8 indexed tier, uint128 priceUSD);
     event HookUpdated(address hook);
     event Withdrawal(address indexed to, uint256 amount);
-    event ProjectNameUpdated(string name);
-    event ProjectSymbolUpdated(string symbol);
 
     // --- Constants ---
 
     uint8 internal constant NO_TIER = type(uint8).max;
 
     // --- State ---
-
-    // Project metadata
-    string public projectName;
-    string public projectSymbol;
 
     // Pricing
     uint128[] public tierPrices;
@@ -85,14 +79,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     constructor(
         address _initialOwner,
-        string memory _projectName,
-        string memory _projectSymbol,
         address _priceFeed,
         uint128[] memory _tierPrices,
         uint256 _saleStart
     ) Ownable(_initialOwner) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
-        projectName = _projectName;
-        projectSymbol = _projectSymbol;
         for (uint256 i = 0; i < _tierPrices.length; i++) {
             if (_tierPrices[i] == 0) revert InvalidPrice();
         }
@@ -240,18 +230,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     function setHook(ISubscriptionHook _hook) external onlyOwner {
         hook = _hook;
         emit HookUpdated(address(_hook));
-    }
-
-    /// @notice Update the project name.
-    function setProjectName(string calldata _name) external onlyOwner {
-        projectName = _name;
-        emit ProjectNameUpdated(_name);
-    }
-
-    /// @notice Update the project symbol.
-    function setProjectSymbol(string calldata _symbol) external onlyOwner {
-        projectSymbol = _symbol;
-        emit ProjectSymbolUpdated(_symbol);
     }
 
     /// @notice Withdraw all collected ETH.
