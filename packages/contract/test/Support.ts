@@ -107,9 +107,9 @@ describe('Support', async function () {
       1n,
     )
 
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 0)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 0)
   })
 
   // --- Same-tier extension ---
@@ -130,8 +130,8 @@ describe('Support', async function () {
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n)
 
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1) // no new segment
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1) // no new segment
   })
 
   // --- Upgrade ---
@@ -194,10 +194,10 @@ describe('Support', async function () {
     assert.equal(active, true)
 
     // Two segments: tier 0, then tier 2
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 2)
-    assert.equal(segs[0].tier, 0)
-    assert.equal(segs[1].tier, 2)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 2)
+    assert.equal(periods[0].tier, 0)
+    assert.equal(periods[1].tier, 2)
   })
 
   it('Should upgrade with duration 0 (convert time, 30d minimum, pay gap)', async function () {
@@ -323,8 +323,8 @@ describe('Support', async function () {
     const [tier] = await support.read.currentTier([1n])
     assert.equal(tier, 0)
 
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 2)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 2)
   })
 
   it('Should reject setting tier price to zero', async function () {
@@ -373,9 +373,9 @@ describe('Support', async function () {
     assert.equal(active, true)
 
     // tierPeriods reset to single entry
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 2)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 2)
   })
 
   it('Should return inactive for expired token', async function () {
@@ -416,6 +416,44 @@ describe('Support', async function () {
     })
 
     assert.equal(balanceAfter, balanceBefore - ethCost - gasUsed)
+  })
+
+  it('Should emit startedAt unchanged on extension', async function () {
+    const { support, hook } = await deploy()
+    const ethCost = await readCost(support, [0, 1])
+
+    // Initial subscription
+    const hash1 = await support.write.support(
+      [walletClient.account.address, 0, 1],
+      { value: ethCost },
+    )
+    const receipt1 = await publicClient.getTransactionReceipt({ hash: hash1 })
+    const events1 = await publicClient.getContractEvents({
+      address: support.address,
+      abi: support.abi,
+      eventName: 'Supported',
+      fromBlock: receipt1.blockNumber,
+      toBlock: receipt1.blockNumber,
+    })
+    const originalStart = events1[0].args.startedAt!
+
+    // Extend same tier
+    const hash2 = await support.write.support(
+      [walletClient.account.address, 0, 1],
+      { value: ethCost },
+    )
+    const receipt2 = await publicClient.getTransactionReceipt({ hash: hash2 })
+    const events2 = await publicClient.getContractEvents({
+      address: support.address,
+      abi: support.abi,
+      eventName: 'Supported',
+      fromBlock: receipt2.blockNumber,
+      toBlock: receipt2.blockNumber,
+    })
+
+    // startedAt should be the same as the original — not derivable from expiresAt - duration
+    assert.equal(events2[0].args.startedAt!, originalStart)
+    assert.ok(events2[0].args.expiresAt! > events1[0].args.expiresAt!)
   })
 
   it('Should revert on insufficient payment', async function () {
@@ -777,9 +815,9 @@ describe('Support', async function () {
     assert.equal(active, true)
 
     // tierPeriods reset
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 2)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 2)
   })
 
   it('Should revert unauthorized transfer', async function () {
@@ -1315,8 +1353,8 @@ describe('Support', async function () {
     ])
     assert.equal(await support.read.startedAt([tokenId]), futureStart)
 
-    const segs = await support.read.tierPeriods([tokenId])
-    assert.equal(segs[0].startedAt, futureStart)
+    const periods = await support.read.tierPeriods([tokenId])
+    assert.equal(periods[0].startedAt, futureStart)
 
     // Expiry is based on future start + 3 months
     const expires = await support.read.expiresAt([tokenId])
@@ -1750,9 +1788,9 @@ describe('Support', async function () {
     const expires = await support.read.expiresAt([tokenId])
     assert.ok(expires > started)
 
-    const segs = await support.read.tierPeriods([tokenId])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 0)
+    const periods = await support.read.tierPeriods([tokenId])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 0)
   })
 
   // --- Extreme duration values ---
@@ -1820,10 +1858,10 @@ describe('Support', async function () {
       await support.write.grant([walletClient.account.address, tier, 1, 0n])
     }
 
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 8)
-    assert.equal(segs[0].tier, 0)
-    assert.equal(segs[7].tier, 3)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 8)
+    assert.equal(periods[0].tier, 0)
+    assert.equal(periods[7].tier, 3)
 
     // tokenURI should render all 8 segments without reverting
     const uri = await support.read.tokenURI([1n])
@@ -2136,8 +2174,8 @@ describe('Support', async function () {
       value: parseEther('1'),
     })
 
-    let segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 2)
+    let periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 2)
 
     // Expire
     await publicClient.request({
@@ -2153,9 +2191,9 @@ describe('Support', async function () {
     })
 
     // tierPeriods should be reset to single entry
-    segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 1)
+    periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 1)
   })
 
   // --- Invalid price ---
@@ -2213,9 +2251,9 @@ describe('BaseSupport', async function () {
       await support.read.subscription([walletClient.account.address]),
       1n,
     )
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 0)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 0)
   })
 
   it('Should extend and change tiers without NFTs', async function () {
@@ -2241,9 +2279,9 @@ describe('BaseSupport', async function () {
     await support.write.support([walletClient.account.address, 2, 1], {
       value: parseEther('1'),
     })
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 2)
-    assert.equal(segs[1].tier, 2)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 2)
+    assert.equal(periods[1].tier, 2)
   })
 
   it('Should track multiple subscribers independently', async function () {
@@ -2297,8 +2335,8 @@ describe('BaseSupport', async function () {
     )
 
     // tierPeriods reset
-    const segs = await support.read.tierPeriods([1n])
-    assert.equal(segs.length, 1)
-    assert.equal(segs[0].tier, 0)
+    const periods = await support.read.tierPeriods([1n])
+    assert.equal(periods.length, 1)
+    assert.equal(periods[0].tier, 0)
   })
 })
