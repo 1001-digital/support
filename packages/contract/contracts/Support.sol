@@ -40,7 +40,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     event Supported(
         address indexed supporter,
         uint8 indexed tier,
-        uint256 indexed tokenId,
+        uint256 indexed subscriptionId,
         uint32 duration,
         uint256 paid,
         uint64 startedAt,
@@ -64,10 +64,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ISubscriptionHook public hook;
 
     // Subscription counter
-    uint256 internal _tokenIdCounter;
+    uint256 internal _subscriptionIdCounter;
 
     function totalSupply() public view virtual returns (uint256) {
-        return _tokenIdCounter;
+        return _subscriptionIdCounter;
     }
 
     // Subscriptions
@@ -113,7 +113,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (recipient == address(0)) revert InvalidRecipient();
         if (tier >= tierPrices.length) revert InvalidTier();
 
-        (uint256 tokenId, bool active, uint8 previousTier) = _resolveSubscription(recipient);
+        (uint256 subId, bool active, uint8 previousTier) = _resolveSubscription(recipient);
 
         if (active && tier != previousTier
             && msg.sender != recipient && msg.sender != owner()) {
@@ -139,17 +139,17 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
             newExpiry = _addDuration(start, adj.adjustedDuration);
         } else if (tier == previousTier) {
             required = _baseCost(adj.adjustedUSD);
-            newExpiry = _addDuration(expiresAt[tokenId], adj.adjustedDuration);
+            newExpiry = _addDuration(expiresAt[subId], adj.adjustedDuration);
         } else {
-            (required, newExpiry) = _changeTier(expiresAt[tokenId], previousTier, tier, adj);
+            (required, newExpiry) = _changeTier(expiresAt[subId], previousTier, tier, adj);
         }
 
         if (msg.value < required) revert InsufficientPayment();
 
-        tokenId = _applySubscription(recipient, tokenId, tier, newExpiry, start);
+        subId = _applySubscription(recipient, subId, tier, newExpiry, start);
         _notifyHook(h, previousTier, tier, recipient);
-        _afterSubscriptionChange(tokenId);
-        emit Supported(recipient, tier, tokenId, duration, required, startedAt[tokenId], newExpiry);
+        _afterSubscriptionChange(subId);
+        emit Supported(recipient, tier, subId, duration, required, startedAt[subId], newExpiry);
 
         uint256 excess = msg.value - required;
         if (excess > 0) {
@@ -163,18 +163,18 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (recipient == address(0)) revert InvalidRecipient();
         if (tier >= tierPrices.length) revert InvalidTier();
 
-        (uint256 tokenId, bool active, uint8 previousTier) = _resolveSubscription(recipient);
+        (uint256 subId, bool active, uint8 previousTier) = _resolveSubscription(recipient);
 
         if (!active && duration == 0) revert InvalidDuration();
 
         uint64 start = startAt != 0 ? startAt : uint64(block.timestamp);
-        uint64 base = active ? expiresAt[tokenId] : start;
+        uint64 base = active ? expiresAt[subId] : start;
         uint64 newExpiry = _addDuration(base, duration);
 
-        tokenId = _applySubscription(recipient, tokenId, tier, newExpiry, start);
+        subId = _applySubscription(recipient, subId, tier, newExpiry, start);
         _notifyHook(hook, previousTier, tier, recipient);
-        _afterSubscriptionChange(tokenId);
-        emit Supported(recipient, tier, tokenId, duration, 0, startedAt[tokenId], newExpiry);
+        _afterSubscriptionChange(subId);
+        emit Supported(recipient, tier, subId, duration, 0, startedAt[subId], newExpiry);
     }
 
     /// @notice Get cost and adjusted duration for a tier and duration.
@@ -190,21 +190,21 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     /// @notice Get all tier periods of a subscription.
-    function tierPeriods(uint256 tokenId) external view returns (TierPeriod[] memory) {
-        return tierHistory[tokenId];
+    function tierPeriods(uint256 subscriptionId) external view returns (TierPeriod[] memory) {
+        return tierHistory[subscriptionId];
     }
 
     /// @notice Get the current tier for a subscription.
-    function currentTier(uint256 tokenId) public view returns (uint8, bool) {
-        uint64 end = expiresAt[tokenId];
+    function currentTier(uint256 subscriptionId) public view returns (uint8, bool) {
+        uint64 end = expiresAt[subscriptionId];
         if (end == 0 || block.timestamp >= end) return (0, false);
-        return (_lastTier(tokenId), true);
+        return (_lastTier(subscriptionId), true);
     }
 
     /// @notice Check whether a subscriber's subscription is currently active.
     function isActive(address subscriber) public view returns (bool) {
-        uint256 tokenId = subscription[subscriber];
-        return tokenId != 0 && block.timestamp < expiresAt[tokenId];
+        uint256 subId = subscription[subscriber];
+        return subId != 0 && block.timestamp < expiresAt[subId];
     }
 
     // --- Owner ---
@@ -247,21 +247,21 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     // --- Hooks ---
 
     /// @dev Called when a new subscription is created. Override to add side effects (e.g. minting an NFT).
-    function _onNewSubscription(address recipient, uint256 tokenId) internal virtual {}
+    function _onNewSubscription(address recipient, uint256 subscriptionId) internal virtual {}
 
     /// @dev Called after any subscription change. Override to add side effects (e.g. metadata update events).
-    function _afterSubscriptionChange(uint256 tokenId) internal virtual {}
+    function _afterSubscriptionChange(uint256 subscriptionId) internal virtual {}
 
     // --- Subscription Internals ---
 
     /// @dev Resolve the subscriber's token and subscription state.
     function _resolveSubscription(address subscriber) internal view returns (
-        uint256 tokenId, bool active, uint8 previousTier
+        uint256 subscriptionId, bool active, uint8 previousTier
     ) {
         if (subscriber == address(0)) return (0, false, NO_TIER);
-        tokenId = subscription[subscriber];
-        active = tokenId != 0 && block.timestamp < expiresAt[tokenId];
-        previousTier = tokenId != 0 ? _lastTier(tokenId) : NO_TIER;
+        subscriptionId = subscription[subscriber];
+        active = subscriptionId != 0 && block.timestamp < expiresAt[subscriptionId];
+        previousTier = subscriptionId != 0 ? _lastTier(subscriptionId) : NO_TIER;
     }
 
     /// @dev Notify the hook of a tier change.
@@ -299,25 +299,25 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     function _applySubscription(
-        address recipient, uint256 tokenId, uint8 tier, uint64 newExpiry, uint64 start
+        address recipient, uint256 subscriptionId, uint8 tier, uint64 newExpiry, uint64 start
     ) internal returns (uint256) {
-        if (tokenId == 0) {
-            tokenId = ++_tokenIdCounter;
-            _onNewSubscription(recipient, tokenId);
+        if (subscriptionId == 0) {
+            subscriptionId = ++_subscriptionIdCounter;
+            _onNewSubscription(recipient, subscriptionId);
         }
 
-        if (block.timestamp >= expiresAt[tokenId]) {
+        if (block.timestamp >= expiresAt[subscriptionId]) {
             // New or reactivated — reset
-            startedAt[tokenId] = start;
-            delete tierHistory[tokenId];
-            tierHistory[tokenId].push(TierPeriod(tier, start));
-        } else if (tier != _lastTier(tokenId)) {
-            tierHistory[tokenId].push(TierPeriod(tier, uint64(block.timestamp)));
+            startedAt[subscriptionId] = start;
+            delete tierHistory[subscriptionId];
+            tierHistory[subscriptionId].push(TierPeriod(tier, start));
+        } else if (tier != _lastTier(subscriptionId)) {
+            tierHistory[subscriptionId].push(TierPeriod(tier, uint64(block.timestamp)));
         }
 
-        subscription[recipient] = tokenId;
-        expiresAt[tokenId] = newExpiry;
-        return tokenId;
+        subscription[recipient] = subscriptionId;
+        expiresAt[subscriptionId] = newExpiry;
+        return subscriptionId;
     }
 
     /// @dev Safely add duration months to a base timestamp, capping at uint64 max.
@@ -329,8 +329,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     // --- Subscription helpers ---
 
 
-    function _lastTier(uint256 tokenId) internal view returns (uint8) {
-        TierPeriod[] storage segs = tierHistory[tokenId];
+    function _lastTier(uint256 subscriptionId) internal view returns (uint8) {
+        TierPeriod[] storage segs = tierHistory[subscriptionId];
         return segs[segs.length - 1].tier;
     }
 
