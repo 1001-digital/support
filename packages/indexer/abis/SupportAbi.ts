@@ -6,9 +6,10 @@ export const SupportAbi = [
     inputs: [
       { indexed: true, name: 'supporter', type: 'address' },
       { indexed: true, name: 'tier', type: 'uint8' },
-      { indexed: true, name: 'tokenId', type: 'uint256' },
+      { indexed: true, name: 'subscriptionId', type: 'uint256' },
       { indexed: false, name: 'duration', type: 'uint32' },
       { indexed: false, name: 'paid', type: 'uint256' },
+      { indexed: false, name: 'startedAt', type: 'uint64' },
       { indexed: false, name: 'expiresAt', type: 'uint64' },
     ],
   },

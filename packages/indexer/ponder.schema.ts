@@ -5,7 +5,7 @@ export const supporter = onchainTable(
   (t) => ({
     address: t.hex().primaryKey(),
     tier: t.integer().notNull(),
-    tokenId: t.bigint().notNull(),
+    subscriptionId: t.bigint().notNull(),
     startedAt: t.bigint().notNull(),
     expiresAt: t.bigint().notNull(),
     totalPaid: t.bigint().notNull(),
@@ -18,7 +18,7 @@ export const supporter = onchainTable(
 export const subscription = onchainTable(
   'subscription',
   (t) => ({
-    tokenId: t.bigint().primaryKey(),
+    subscriptionId: t.bigint().primaryKey(),
     owner: t.hex().notNull(),
     subscriber: t.hex().notNull(),
     startedAt: t.bigint().notNull(),
@@ -35,16 +35,17 @@ export const supportEvent = onchainTable(
   'support_event',
   (t) => ({
     id: t.text().primaryKey(),
-    tokenId: t.bigint().notNull(),
+    subscriptionId: t.bigint().notNull(),
     tier: t.integer().notNull(),
     duration: t.integer().notNull(),
     paid: t.bigint().notNull(),
+    startedAt: t.bigint().notNull(),
     expiresAt: t.bigint().notNull(),
     block: t.bigint().notNull(),
     timestamp: t.bigint().notNull(),
   }),
   (table) => ({
-    tokenIdx: index().on(table.tokenId),
+    subscriptionIdx: index().on(table.subscriptionId),
     tierIdx: index().on(table.tier),
   }),
 )
@@ -55,7 +56,7 @@ export const subscriptionRelations = relations(subscription, ({ many }) => ({
 
 export const supportEventRelations = relations(supportEvent, ({ one }) => ({
   subscription: one(subscription, {
-    fields: [supportEvent.tokenId],
-    references: [subscription.tokenId],
+    fields: [supportEvent.subscriptionId],
+    references: [subscription.subscriptionId],
   }),
 }))
