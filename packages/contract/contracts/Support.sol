@@ -73,7 +73,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     mapping(address => uint256) public subscription;
     mapping(uint256 => uint64) public startedAt;
     mapping(uint256 => uint64) public expiresAt;
-    mapping(uint256 => TierPeriod[]) internal _tierPeriods;
+    mapping(uint256 => TierPeriod[]) public tierHistory;
 
     // --- Constructor ---
 
@@ -188,14 +188,16 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         adjustedDuration = adj.adjustedDuration;
     }
 
-    /// @notice Get the tier periods of a subscription.
+    /// @notice Get all tier periods of a subscription.
     function tierPeriods(uint256 tokenId) external view returns (TierPeriod[] memory) {
-        return _tierPeriods[tokenId];
+        return tierHistory[tokenId];
     }
 
     /// @notice Get the current tier for a subscription.
-    function currentTier(uint256 tokenId) external view returns (uint8 tier, bool active) {
-        return _currentTier(tokenId);
+    function currentTier(uint256 tokenId) public view returns (uint8, bool) {
+        uint64 end = expiresAt[tokenId];
+        if (end == 0 || block.timestamp >= end) return (0, false);
+        return (_lastTier(tokenId), true);
     }
 
     /// @notice Check whether a subscriber's subscription is currently active.
@@ -306,10 +308,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (block.timestamp >= expiresAt[tokenId]) {
             // New or reactivated — reset
             startedAt[tokenId] = start;
-            delete _tierPeriods[tokenId];
-            _tierPeriods[tokenId].push(TierPeriod(tier, start));
+            delete tierHistory[tokenId];
+            tierHistory[tokenId].push(TierPeriod(tier, start));
         } else if (tier != _lastTier(tokenId)) {
-            _tierPeriods[tokenId].push(TierPeriod(tier, uint64(block.timestamp)));
+            tierHistory[tokenId].push(TierPeriod(tier, uint64(block.timestamp)));
         }
 
         subscription[recipient] = tokenId;
@@ -325,14 +327,9 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Subscription helpers ---
 
-    function _currentTier(uint256 tokenId) internal view returns (uint8, bool) {
-        uint64 end = expiresAt[tokenId];
-        if (end == 0 || block.timestamp >= end) return (0, false);
-        return (_lastTier(tokenId), true);
-    }
 
     function _lastTier(uint256 tokenId) internal view returns (uint8) {
-        TierPeriod[] storage segs = _tierPeriods[tokenId];
+        TierPeriod[] storage segs = tierHistory[tokenId];
         return segs[segs.length - 1].tier;
     }
 

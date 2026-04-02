@@ -40,7 +40,7 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         address owner = _requireOwned(tokenId);
 
-        (uint8 tier, bool active) = _currentTier(tokenId);
+        (uint8 tier, bool active) = currentTier(tokenId);
         uint8 displayTier = active ? tier : _lastTier(tokenId);
 
         ISupportRenderer.TokenData memory data = ISupportRenderer.TokenData({
@@ -52,7 +52,7 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
             expiresAt: expiresAt[tokenId],
             displayTier: displayTier,
             active: active,
-            tierPeriods: _tierPeriods[tokenId]
+            tierPeriods: tierHistory[tokenId]
         });
 
         return renderer.tokenURI(data);
