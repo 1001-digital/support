@@ -9,6 +9,7 @@ import {Support} from "./Support.sol";
 contract SupportToken is WithSupportTokens {
 
     constructor(
+        address _initialOwner,
         string memory _projectName,
         string memory _projectSymbol,
         address _priceFeed,
@@ -16,7 +17,7 @@ contract SupportToken is WithSupportTokens {
         uint256 _saleStart,
         string memory _logo,
         address _renderer
-    ) Support(_projectName, _projectSymbol, _priceFeed, _tierPrices, _saleStart)
+    ) Support(_initialOwner, _projectName, _projectSymbol, _priceFeed, _tierPrices, _saleStart)
       WithSupportTokens(_logo, _renderer)
     {}
 

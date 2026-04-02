@@ -80,12 +80,13 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     // --- Constructor ---
 
     constructor(
+        address _initialOwner,
         string memory _projectName,
         string memory _projectSymbol,
         address _priceFeed,
         uint128[] memory _tierPrices,
         uint256 _saleStart
-    ) Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
+    ) Ownable(_initialOwner) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
         projectName = _projectName;
         projectSymbol = _projectSymbol;
         for (uint256 i = 0; i < _tierPrices.length; i++) {

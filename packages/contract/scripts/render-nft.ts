@@ -9,14 +9,16 @@ async function main() {
 
   const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
   const renderer = await viem.deployContract('SupportRenderer', [])
+  const [deployer] = await viem.getWalletClients()
   const support = await viem.deployContract('SupportToken', [
+    deployer.account.address,
     'EVM.NOW',
     'EVMNOW',
-    logo,
     priceFeed.address,
     tierPrices,
-    renderer.address,
     0n,
+    logo,
+    renderer.address,
   ])
 
   const discountHook = await viem.deployContract('DiscountHook', [12, 20])

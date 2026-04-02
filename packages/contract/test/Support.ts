@@ -31,6 +31,7 @@ describe('Support', async function () {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
     const renderer = await viem.deployContract('SupportRenderer', [])
     const support = await viem.deployContract('SupportToken', [
+      walletClient.account.address,
       'TestProject',
       'TEST',
       priceFeed.address,
@@ -2117,6 +2118,7 @@ describe('BaseSupport', async function () {
   async function deployBase() {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
     const support = await viem.deployContract('MockSupport', [
+      walletClient.account.address,
       'TestProject',
       'TEST',
       priceFeed.address,
