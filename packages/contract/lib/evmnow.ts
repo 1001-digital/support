@@ -26,4 +26,11 @@ export const tierPrices = [
   100_000_000_000n,
 ]
 
-export const tierNames = ['supporter', 'gold', 'platinum', 'partner']
+export const tierBadges = [
+  { name: 'SUPPORTER', bg: '#DCDCDC', tc: '#484848', width: 120 },
+  { name: 'GOLD',      bg: '#A29C7A', tc: '#fff',    width: 81  },
+  { name: 'PLATINUM',  bg: '#8B8F9A', tc: '#fff',    width: 109 },
+  { name: 'PARTNER',   bg: '#000',    tc: '#fff',    width: 102 },
+]
+
+export const tierNames = tierBadges.map(b => b.name.toLowerCase())

@@ -22,6 +22,19 @@ const discountPercentOff = 20
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 
+const tierBadges = [
+  { name: 'SUPPORTER', bg: '#DCDCDC', tc: '#484848', width: 120 },
+  { name: 'GOLD',      bg: '#A29C7A', tc: '#fff',    width: 81  },
+  { name: 'PLATINUM',  bg: '#8B8F9A', tc: '#fff',    width: 109 },
+  { name: 'PARTNER',   bg: '#000',    tc: '#fff',    width: 102 },
+]
+
+async function configureBadges(renderer: any) {
+  for (const [i, b] of tierBadges.entries()) {
+    await renderer.write.setTierBadge([i, b.name, b.bg, b.tc, b.width])
+  }
+}
+
 async function readCost(support: any, args: [number, number]): Promise<bigint> {
   return (await support.read.estimate([...args, ZERO_ADDRESS]))[0]
 }
@@ -30,6 +43,7 @@ describe('Support', async function () {
   async function deploy() {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
     const renderer = await viem.deployContract('SupportRenderer', [])
+    await configureBadges(renderer)
     const support = await viem.deployContract('SupportToken', [
       walletClient.account.address,
       'TestProject',
@@ -1532,14 +1546,54 @@ describe('Support', async function () {
     )
   })
 
+  // --- Tier Badges ---
+
+  it('Should render configured tier badge', async function () {
+    const { support } = await deploy()
+    await support.write.support([walletClient.account.address, 1, 1], {
+      value: await readCost(support, [1, 1]),
+    })
+
+    const uri = await support.read.tokenURI([1n])
+    const json = JSON.parse(Buffer.from(uri.split(',')[1], 'base64').toString())
+    const svg = Buffer.from(json.image.split(',')[1], 'base64').toString()
+    assert.ok(svg.includes('GOLD'))
+    assert.ok(svg.includes('#A29C7A'))
+  })
+
+  it('Should render fallback badge for unconfigured tier', async function () {
+    const { support } = await deploy()
+    // Add tier 4 on the Support contract without configuring a badge
+    await support.write.addTier([10000000000n])
+    await support.write.grant([walletClient.account.address, 4, 1, 0n])
+
+    const uri = await support.read.tokenURI([1n])
+    const json = JSON.parse(Buffer.from(uri.split(',')[1], 'base64').toString())
+    const svg = Buffer.from(json.image.split(',')[1], 'base64').toString()
+    assert.ok(svg.includes('TIER 4'))
+    assert.ok(svg.includes('#888'))
+  })
+
+  it('Should reject non-owner setTierBadge', async function () {
+    const { renderer } = await deploy()
+    await assert.rejects(
+      renderer.write.setTierBadge([0, 'TEST', '#000', '#fff', 100], {
+        account: otherWallet.account,
+      }),
+      /OwnableUnauthorizedAccount/,
+    )
+  })
+
   // --- Sale Start ---
 
   async function deployWithFutureSale() {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
     const renderer = await viem.deployContract('SupportRenderer', [])
+    await configureBadges(renderer)
     const block = await publicClient.getBlock()
     const futureSaleStart = block.timestamp + 86400n // 1 day from chain time
     const support = await viem.deployContract('SupportToken', [
+      walletClient.account.address,
       'TestProject',
       'TEST',
       priceFeed.address,
@@ -2099,6 +2153,7 @@ describe('Support', async function () {
 
     await assert.rejects(
       viem.deployContract('SupportToken', [
+        walletClient.account.address,
         'TestProject',
         'TEST',
         priceFeed.address,

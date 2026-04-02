@@ -1,6 +1,6 @@
 import { network } from 'hardhat'
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { logo, tierPrices, tierNames } from '../lib/evmnow'
+import { logo, tierPrices, tierNames, tierBadges } from '../lib/evmnow'
 
 async function main() {
   const { viem } = await network.connect()
@@ -9,6 +9,10 @@ async function main() {
 
   const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
   const renderer = await viem.deployContract('SupportRenderer', [])
+  for (let i = 0; i < tierBadges.length; i++) {
+    const b = tierBadges[i]
+    await renderer.write.setTierBadge([i, b.name, b.bg, b.tc, b.width])
+  }
   const [deployer] = await viem.getWalletClients()
   const support = await viem.deployContract('SupportToken', [
     deployer.account.address,

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
@@ -8,7 +9,29 @@ import {WithENSReverseLookup} from "@1001-digital/erc721-extensions/contracts/Wi
 import {ISupportRenderer} from "../interfaces/ISupportRenderer.sol";
 import {TierPeriod} from "../interfaces/Types.sol";
 
-contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
+contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
+
+    struct TierBadge {
+        string name;
+        string bg;
+        string tc;
+        uint16 width;
+    }
+
+    error InvalidBadgeWidth();
+
+    event TierBadgeUpdated(uint8 indexed tier);
+
+    mapping(uint8 => TierBadge) internal _tierBadges;
+
+    constructor() Ownable(msg.sender) {}
+
+    /// @notice Set the visual badge metadata for a tier.
+    function setTierBadge(uint8 tier, string calldata name, string calldata bg, string calldata tc, uint16 width) external onlyOwner {
+        if (width == 0 || width > 400) revert InvalidBadgeWidth();
+        _tierBadges[tier] = TierBadge(name, bg, tc, width);
+        emit TierBadgeUpdated(tier);
+    }
 
     function tokenURI(TokenData calldata data) external view returns (string memory) {
         string memory safeName = LibString.escapeHTML(data.projectName);
@@ -46,16 +69,25 @@ contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
     }
 
     /// @dev Builds the center badge: rounded rect, logo left, tier name right.
-    function _badge(uint8 tier, string calldata logo) internal pure returns (string memory) {
+    function _badge(uint8 tier, string calldata logo) internal view returns (string memory) {
+        TierBadge storage badge = _tierBadges[tier];
+
         string memory bg;
         string memory tc;
         string memory t;
         uint256 w;
 
-        if (tier == 0)      { bg = '#DCDCDC'; tc = '#484848'; t = 'SUPPORTER'; w = 120; }
-        else if (tier == 1) { bg = '#A29C7A'; tc = '#fff';    t = 'GOLD';      w = 81;  }
-        else if (tier == 2) { bg = '#8B8F9A'; tc = '#fff';    t = 'PLATINUM';  w = 109; }
-        else                { bg = '#000';    tc = '#fff';    t = 'PARTNER';   w = 102; }
+        if (bytes(badge.name).length > 0) {
+            bg = badge.bg;
+            tc = badge.tc;
+            t = badge.name;
+            w = badge.width;
+        } else {
+            bg = '#888';
+            tc = '#fff';
+            t = string.concat('TIER ', Strings.toString(tier));
+            w = 90;
+        }
 
         uint256 x = (400 - w) / 2;
         uint256 textX = 26 + (w - 26) / 2;
