@@ -18,7 +18,7 @@ interface ISubscriptionHook {
     /// @param baseUSD       Raw tierPrice * duration before adjustments
     /// @param subscriber    The address being subscribed (address(0) for generic estimates)
     /// @param isNew         true if this is a brand new subscription
-    /// @param previousTier  The subscriber's current tier (type(uint8).max if none)
+    /// @param previousTier  The subscriber's current tier (NO_TIER if none)
     /// @return adj The adjusted subscription parameters
     function beforeSubscribe(
         uint8   tier,

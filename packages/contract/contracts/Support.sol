@@ -52,6 +52,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     event ProjectNameUpdated(string name);
     event ProjectSymbolUpdated(string symbol);
 
+    // --- Constants ---
+
+    uint8 internal constant NO_TIER = type(uint8).max;
+
     // --- State ---
 
     // Project metadata
@@ -273,16 +277,16 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     function _resolveSubscription(address subscriber) internal view returns (
         uint256 tokenId, bool active, uint8 previousTier
     ) {
-        if (subscriber == address(0)) return (0, false, type(uint8).max);
+        if (subscriber == address(0)) return (0, false, NO_TIER);
         tokenId = subscription[subscriber];
         active = tokenId != 0 && block.timestamp < expiresAt[tokenId];
-        previousTier = tokenId != 0 ? _lastTier(tokenId) : type(uint8).max;
+        previousTier = tokenId != 0 ? _lastTier(tokenId) : NO_TIER;
     }
 
     /// @dev Notify the hook of a tier change.
     function _notifyHook(ISubscriptionHook h, uint8 previousTier, uint8 tier, address recipient) internal {
         if (address(h) == address(0)) return;
-        if (previousTier != type(uint8).max && previousTier != tier) {
+        if (previousTier != NO_TIER && previousTier != tier) {
             h.onRelease(previousTier, recipient);
         }
         h.onSubscribe(tier, recipient);
