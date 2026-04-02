@@ -19,7 +19,7 @@ import {ISubscriptionHook} from "./interfaces/ISubscriptionHook.sol";
 *        ───────────────────
 *
 *  @title  Support
-*  @author ygg
+*  @author yougogirl.eth & jalil.eth
 *  @notice A tiered support system on the world computer.
 */
 abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
