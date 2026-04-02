@@ -6,7 +6,7 @@ import {TierPeriod} from "./Types.sol";
 interface ISupportRenderer {
     struct TokenData {
         uint256 tokenId;
-        address subscriber;
+        address supporter;
         string projectName;
         string logo;
         uint64 startedAt;

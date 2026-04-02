@@ -45,7 +45,7 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
 
         ISupportRenderer.TokenData memory data = ISupportRenderer.TokenData({
             tokenId: tokenId,
-            subscriber: owner,
+            supporter: owner,
             projectName: name(),
             logo: logo,
             startedAt: startedAt[tokenId],

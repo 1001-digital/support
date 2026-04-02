@@ -61,7 +61,7 @@ contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
             '<rect width="400" height="400" fill="white"/>'
             '<style>.l{font-family:monospace;fill:#666;text-transform:uppercase;font-size:10px;font-weight:500}</style>'
             '<text class="l" x="20" y="30">', safeName, ' SUPPORTERS</text>'
-            '<text class="l" x="380" y="30" text-anchor="end">', _displayName(data.subscriber), '</text>',
+            '<text class="l" x="380" y="30" text-anchor="end">', _displayName(data.supporter), '</text>',
             _badge(data.displayTier, data.logo),
             '<text class="l" x="20" y="380">DAY ', Strings.toString(dayNum), '</text>'
             '<text class="l" x="200" y="380" text-anchor="middle">', data.active ? 'ACTIVE' : 'EXPIRED', '</text>'

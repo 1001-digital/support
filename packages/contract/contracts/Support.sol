@@ -178,12 +178,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     /// @notice Get cost and adjusted duration for a tier and duration.
-    function estimate(uint8 tier, uint32 duration, address subscriber) external view returns (uint256 ethCost, uint32 adjustedDuration) {
+    function estimate(uint8 tier, uint32 duration, address supporter) external view returns (uint256 ethCost, uint32 adjustedDuration) {
         if (tier >= tierPrices.length) revert InvalidTier();
         if (duration == 0) revert InvalidDuration();
-        (, bool active, uint8 previousTier) = _resolveSubscription(subscriber);
+        (, bool active, uint8 previousTier) = _resolveSubscription(supporter);
         ISubscriptionHook.Adjustments memory adj = _beforeSubscribe(
-            hook, tier, duration, subscriber, !active, previousTier
+            hook, tier, duration, supporter, !active, previousTier
         );
         ethCost = _baseCost(adj.adjustedUSD);
         adjustedDuration = adj.adjustedDuration;
@@ -202,8 +202,8 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     /// @notice Check whether a subscriber's subscription is currently active.
-    function isActive(address subscriber) public view returns (bool) {
-        uint256 subId = subscription[subscriber];
+    function isActive(address supporter) public view returns (bool) {
+        uint256 subId = subscription[supporter];
         return subId != 0 && block.timestamp < expiresAt[subId];
     }
 
@@ -254,12 +254,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Subscription Internals ---
 
-    /// @dev Resolve the subscriber's token and subscription state.
-    function _resolveSubscription(address subscriber) internal view returns (
+    /// @dev Resolve the supporter's subscription state.
+    function _resolveSubscription(address supporter) internal view returns (
         uint256 subscriptionId, bool active, uint8 previousTier
     ) {
-        if (subscriber == address(0)) return (0, false, NO_TIER);
-        subscriptionId = subscription[subscriber];
+        if (supporter == address(0)) return (0, false, NO_TIER);
+        subscriptionId = subscription[supporter];
         active = subscriptionId != 0 && block.timestamp < expiresAt[subscriptionId];
         previousTier = subscriptionId != 0 ? _lastTier(subscriptionId) : NO_TIER;
     }
@@ -328,22 +328,21 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Subscription helpers ---
 
-
     function _lastTier(uint256 subscriptionId) internal view returns (uint8) {
-        TierPeriod[] storage segs = tierHistory[subscriptionId];
-        return segs[segs.length - 1].tier;
+        TierPeriod[] storage periods = tierHistory[subscriptionId];
+        return periods[periods.length - 1].tier;
     }
 
     // --- Pricing ---
 
     function _beforeSubscribe(
-        ISubscriptionHook h, uint8 tier, uint32 duration, address subscriber, bool isNew, uint8 previousTier
+        ISubscriptionHook h, uint8 tier, uint32 duration, address supporter, bool isNew, uint8 previousTier
     ) internal view returns (ISubscriptionHook.Adjustments memory adj) {
         uint256 baseUSD = uint256(tierPrices[tier]) * duration;
         if (address(h) == address(0)) {
             return ISubscriptionHook.Adjustments(baseUSD, duration, 0);
         }
-        adj = h.beforeSubscribe(tier, duration, baseUSD, subscriber, isNew, previousTier);
+        adj = h.beforeSubscribe(tier, duration, baseUSD, supporter, isNew, previousTier);
     }
 
     function _baseCost(uint256 adjustedUSD) internal view returns (uint256) {

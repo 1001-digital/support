@@ -16,25 +16,25 @@ interface ISubscriptionHook {
     /// @param tier          The target tier
     /// @param duration      Requested duration in months
     /// @param baseUSD       Raw tierPrice * duration before adjustments
-    /// @param subscriber    The address being subscribed (address(0) for generic estimates)
+    /// @param supporter    The address being subscribed (address(0) for generic estimates)
     /// @param isNew         true if this is a brand new subscription
-    /// @param previousTier  The subscriber's current tier (NO_TIER if none)
+    /// @param previousTier  The supporter's current tier (NO_TIER if none)
     /// @return adj The adjusted subscription parameters
     function beforeSubscribe(
         uint8   tier,
         uint32  duration,
         uint256 baseUSD,
-        address subscriber,
+        address supporter,
         bool    isNew,
         uint8   previousTier
     ) external view returns (Adjustments memory adj);
 
     /// @notice Check whether a subscription is allowed (for off-chain estimation).
-    function canSubscribe(uint8 tier, address subscriber) external view returns (bool);
+    function canSubscribe(uint8 tier, address supporter) external view returns (bool);
 
     /// @notice Called after a subscription is applied. Revert to block it.
-    function onSubscribe(uint8 tier, address subscriber) external;
+    function onSubscribe(uint8 tier, address supporter) external;
 
-    /// @notice Called when a subscriber leaves a tier (upgrade, downgrade, or transfer).
-    function onRelease(uint8 tier, address subscriber) external;
+    /// @notice Called when a supporter leaves a tier (upgrade, downgrade, or transfer).
+    function onRelease(uint8 tier, address supporter) external;
 }

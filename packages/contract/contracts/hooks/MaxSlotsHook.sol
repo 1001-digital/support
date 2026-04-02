@@ -6,7 +6,7 @@ import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 import {ISupport} from "../interfaces/ISupport.sol";
 
 /// @title MaxSlotsHook
-/// @notice Enforces a maximum number of active subscribers per tier.
+/// @notice Enforces a maximum number of active supporters per tier.
 contract MaxSlotsHook is ISubscriptionHook, Ownable {
 
     error TierFull();
@@ -32,36 +32,36 @@ contract MaxSlotsHook is ISubscriptionHook, Ownable {
     // --- ISubscriptionHook ---
 
     function beforeSubscribe(
-        uint8 tier, uint32 duration, uint256 baseUSD, address subscriber, bool, uint8
+        uint8 tier, uint32 duration, uint256 baseUSD, address supporter, bool, uint8
     ) external view override returns (Adjustments memory adj) {
-        if (!_canSubscribe(tier, subscriber)) revert SubscriptionBlocked();
+        if (!_canSubscribe(tier, supporter)) revert SubscriptionBlocked();
         adj.adjustedUSD = baseUSD;
         adj.adjustedDuration = duration;
         adj.adjustedStart = 0;
     }
 
-    function canSubscribe(uint8 tier, address subscriber) external view override returns (bool) {
-        return _canSubscribe(tier, subscriber);
+    function canSubscribe(uint8 tier, address supporter) external view override returns (bool) {
+        return _canSubscribe(tier, supporter);
     }
 
-    function onSubscribe(uint8 tier, address subscriber) external override onlySupport {
+    function onSubscribe(uint8 tier, address supporter) external override onlySupport {
         uint16 max = maxSlots[tier];
         if (max == 0) return;
-        if (_tierHolderIndex[tier][subscriber] != 0) return;
+        if (_tierHolderIndex[tier][supporter] != 0) return;
 
         address[] storage holders = _tierHolders[tier];
 
         if (holders.length < max) {
-            holders.push(subscriber);
-            _tierHolderIndex[tier][subscriber] = holders.length;
+            holders.push(supporter);
+            _tierHolderIndex[tier][supporter] = holders.length;
             return;
         }
 
         for (uint256 i; i < holders.length; ++i) {
             if (!_isActiveOnTier(holders[i], tier)) {
                 delete _tierHolderIndex[tier][holders[i]];
-                holders[i] = subscriber;
-                _tierHolderIndex[tier][subscriber] = i + 1;
+                holders[i] = supporter;
+                _tierHolderIndex[tier][supporter] = i + 1;
                 return;
             }
         }
@@ -116,10 +116,10 @@ contract MaxSlotsHook is ISubscriptionHook, Ownable {
 
     // --- Internal ---
 
-    function _canSubscribe(uint8 tier, address subscriber) internal view returns (bool) {
+    function _canSubscribe(uint8 tier, address supporter) internal view returns (bool) {
         uint16 max = maxSlots[tier];
         if (max == 0) return true;
-        if (_tierHolderIndex[tier][subscriber] != 0) return true;
+        if (_tierHolderIndex[tier][supporter] != 0) return true;
         if (_tierHolders[tier].length < max) return true;
 
         address[] storage holders = _tierHolders[tier];
