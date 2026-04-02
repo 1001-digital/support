@@ -12,7 +12,7 @@ contract SupportToken is WithSupportTokens {
         string memory _projectName,
         string memory _projectSymbol,
         address _priceFeed,
-        uint128[4] memory _tierPrices,
+        uint128[] memory _tierPrices,
         uint256 _saleStart,
         string memory _logo,
         address _renderer

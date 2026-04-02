@@ -24,6 +24,6 @@ export const tierPrices = [
   6_900_000_000n,
   25_000_000_000n,
   100_000_000_000n,
-] as const
+]
 
 export const tierNames = ['supporter', 'gold', 'platinum', 'partner']

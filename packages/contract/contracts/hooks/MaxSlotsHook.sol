@@ -14,13 +14,12 @@ interface ISupportRead {
 contract MaxSlotsHook is ISubscriptionHook, Ownable {
 
     error TierFull();
-    error InvalidTier();
     error OnlySupport();
 
     event MaxSlotsUpdated(uint8 indexed tier, uint16 maxSlots);
 
     address public immutable support;
-    uint16[4] public maxSlots;
+    mapping(uint8 => uint16) public maxSlots;
 
     mapping(uint8 => address[]) internal _tierHolders;
     mapping(uint8 => mapping(address => uint256)) internal _tierHolderIndex; // 1-indexed; 0 = not present
@@ -95,7 +94,6 @@ contract MaxSlotsHook is ISubscriptionHook, Ownable {
     // --- Owner ---
 
     function setMaxSlots(uint8 tier, uint16 max) external onlyOwner {
-        if (tier >= 4) revert InvalidTier();
         maxSlots[tier] = max;
         emit MaxSlotsUpdated(tier, max);
     }

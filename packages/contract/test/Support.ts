@@ -10,7 +10,7 @@ const [walletClient, otherWallet] = await viem.getWalletClients()
 
 const ETH_USD = 200000000000n // $2,000
 
-const tierPrices: readonly [bigint, bigint, bigint, bigint] = [
+const tierPrices = [
   500000000n, // $5/mo
   1000000000n, // $10/mo
   2500000000n, // $25/mo

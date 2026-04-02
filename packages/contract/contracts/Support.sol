@@ -59,7 +59,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     string public projectSymbol;
 
     // Pricing
-    uint128[4] public tierPrices;
+    uint128[] public tierPrices;
 
     // Hook
     ISubscriptionHook public hook;
@@ -83,12 +83,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         string memory _projectName,
         string memory _projectSymbol,
         address _priceFeed,
-        uint128[4] memory _tierPrices,
+        uint128[] memory _tierPrices,
         uint256 _saleStart
     ) Ownable(msg.sender) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
         projectName = _projectName;
         projectSymbol = _projectSymbol;
-        for (uint8 i = 0; i < 4; i++) {
+        for (uint256 i = 0; i < _tierPrices.length; i++) {
             if (_tierPrices[i] == 0) revert InvalidPrice();
         }
         tierPrices = _tierPrices;
@@ -115,7 +115,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ///      recipient (or owner) may change tiers.
     function support(address recipient, uint8 tier, uint32 duration) external payable afterSaleStart {
         if (recipient == address(0)) revert InvalidRecipient();
-        if (tier >= 4) revert InvalidTier();
+        if (tier >= tierPrices.length) revert InvalidTier();
 
         (uint256 tokenId, bool isNew, uint8 previousTier) = _resolveSubscription(recipient);
 
@@ -165,7 +165,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     /// @notice Grant a free subscription (owner only).
     function grant(address recipient, uint8 tier, uint32 duration, uint64 startAt) external onlyOwner {
         if (recipient == address(0)) revert InvalidRecipient();
-        if (tier >= 4) revert InvalidTier();
+        if (tier >= tierPrices.length) revert InvalidTier();
 
         (uint256 tokenId, bool isNew, uint8 previousTier) = _resolveSubscription(recipient);
 
@@ -183,7 +183,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     /// @notice Get cost and adjusted duration for a tier and duration.
     function estimate(uint8 tier, uint32 duration, address subscriber) external view returns (uint256 ethCost, uint32 adjustedDuration) {
-        if (tier >= 4) revert InvalidTier();
+        if (tier >= tierPrices.length) revert InvalidTier();
         if (duration == 0) revert InvalidDuration();
         (, bool isNew, uint8 previousTier) = _resolveSubscription(subscriber);
         ISubscriptionHook.Adjustments memory adj = _beforeSubscribe(
@@ -210,12 +210,24 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Owner ---
 
+    /// @notice Get the number of available tiers.
+    function totalTiers() public view returns (uint256) {
+        return tierPrices.length;
+    }
+
     /// @notice Update a tier's monthly USD price.
     function setTierPrice(uint8 tier, uint128 priceUSD) external onlyOwner {
-        if (tier >= 4) revert InvalidTier();
+        if (tier >= tierPrices.length) revert InvalidTier();
         if (priceUSD == 0) revert InvalidPrice();
         tierPrices[tier] = priceUSD;
         emit TierPriceUpdated(tier, priceUSD);
+    }
+
+    /// @notice Add a new tier with a monthly USD price.
+    function addTier(uint128 priceUSD) external onlyOwner {
+        if (priceUSD == 0) revert InvalidPrice();
+        tierPrices.push(priceUSD);
+        emit TierPriceUpdated(uint8(tierPrices.length - 1), priceUSD);
     }
 
     /// @notice Set the subscription hook contract (address(0) to disable).

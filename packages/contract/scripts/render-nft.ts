@@ -26,7 +26,7 @@ async function main() {
 
   mkdirSync('scripts/output', { recursive: true })
 
-  for (let tier = 0; tier < 4; tier++) {
+  for (let tier = 0; tier < tierPrices.length; tier++) {
     const wallet = wallets[tier]
     const cost = await support.read.cost([tier, 1])
 
