@@ -2,14 +2,14 @@
 pragma solidity ^0.8.28;
 
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import {OnePerWallet} from "@1001-digital/erc721-extensions/contracts/OnePerWallet.sol";
 import {Support} from "../Support.sol";
 import {ISupportRenderer, TierPeriod} from "../interfaces/ISupportRenderer.sol";
 import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 /// @title WithSupportTokens
-/// @notice Extension that represents support subscriptions as ERC-721 tokens.
-abstract contract WithSupportTokens is Support, ERC721Enumerable {
+/// @notice Extension that represents support subscriptions as ERC-721 tokens (one per wallet).
+abstract contract WithSupportTokens is Support, OnePerWallet {
 
     // --- Events ---
 
@@ -63,11 +63,11 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
         return renderer.tokenURI(data);
     }
 
-    function totalSupply() public view override(Support, ERC721Enumerable) returns (uint256) {
-        return super.totalSupply();
+    function totalSupply() public view override returns (uint256) {
+        return _tokenIdCounter;
     }
 
-    function supportsInterface(bytes4 interfaceId) public view override(ERC721Enumerable) returns (bool) {
+    function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
         return interfaceId == 0x49064906 // ERC-4906
             || super.supportsInterface(interfaceId);
     }
@@ -81,58 +81,18 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
         uint8 tier;
         if (wasActive) tier = _lastTier(tokenId);
 
-        _transferActiveToken(from, tokenId);
-        _receiveActiveToken(to, tokenId);
+        activeToken[from] = 0;
+        activeToken[to] = tokenId; // always track, even if expired — so re-subscribe finds it
 
         if (wasActive) {
             ISubscriptionHook h = hook;
             if (address(h) != address(0)) {
-                if (!_hasActiveTierToken(from, tier)) {
-                    h.onRelease(tier, from);
-                }
-                if (_hasActiveTierToken(to, tier)) {
-                    h.onSubscribe(tier, to);
-                }
+                h.onRelease(tier, from);
+                h.onSubscribe(tier, to);
             }
         }
 
         return from;
-    }
-
-    /// @dev When the sender's active token is transferred, find a replacement.
-    function _transferActiveToken(address from, uint256 tokenId) private {
-        if (activeToken[from] != tokenId) return;
-
-        uint256 replacement;
-        uint256 balance = balanceOf(from);
-        for (uint256 i; i < balance; ++i) {
-            uint256 candidate = tokenOfOwnerByIndex(from, i);
-            if (block.timestamp < expiresAt[candidate]) {
-                replacement = candidate;
-                break;
-            }
-        }
-        activeToken[from] = replacement;
-    }
-
-    /// @dev Assign the transferred token as active if the receiver has no other
-    ///      active token. Skips the transferred token when scanning so that
-    ///      _activeTokenOf (which would find it) is not used.
-    function _receiveActiveToken(address to, uint256 tokenId) private {
-        if (block.timestamp >= expiresAt[tokenId]) return;
-
-        uint256 existing = activeToken[to];
-        if (existing != 0 && block.timestamp < expiresAt[existing]) return;
-
-        uint256 balance = balanceOf(to);
-        for (uint256 i; i < balance; ++i) {
-            uint256 candidate = tokenOfOwnerByIndex(to, i);
-            if (candidate != tokenId && block.timestamp < expiresAt[candidate]) {
-                return;
-            }
-        }
-
-        activeToken[to] = tokenId;
     }
 
     // --- Hook Overrides ---
@@ -143,35 +103,6 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
 
     function _afterSubscriptionChange(uint256 tokenId) internal override {
         emit MetadataUpdate(tokenId);
-    }
-
-    function _activeTokenOf(address supporter) internal view override returns (uint256 tokenId) {
-        tokenId = activeToken[supporter];
-        if (tokenId != 0 && block.timestamp < expiresAt[tokenId]) {
-            return tokenId;
-        }
-
-        uint256 balance = balanceOf(supporter);
-        for (uint256 i; i < balance; ++i) {
-            uint256 candidate = tokenOfOwnerByIndex(supporter, i);
-            if (block.timestamp < expiresAt[candidate]) {
-                return candidate;
-            }
-        }
-
-        return 0;
-    }
-
-    function _hasActiveTierToken(address supporter, uint8 tier) private view returns (bool) {
-        uint256 balance = balanceOf(supporter);
-        for (uint256 i; i < balance; ++i) {
-            uint256 tokenId = tokenOfOwnerByIndex(supporter, i);
-            if (block.timestamp < expiresAt[tokenId] && _lastTier(tokenId) == tier) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     // --- Owner ---

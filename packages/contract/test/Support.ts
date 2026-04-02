@@ -309,9 +309,9 @@ describe('Support', async function () {
     )
   })
 
-  // --- Subscription expiry + new NFT ---
+  // --- Subscription expiry + token reuse ---
 
-  it('Should mint new NFT after expiry', async function () {
+  it('Should reuse token on re-subscribe after expiry', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
@@ -329,21 +329,26 @@ describe('Support', async function () {
       value: await readCost(support, [2, 1]),
     })
 
-    assert.equal(await support.read.totalSupply(), 2n)
+    // Same token reused — no new mint
+    assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
       await support.read.activeToken([walletClient.account.address]),
-      2n,
+      1n,
     )
     assert.equal(
       await support.read.balanceOf([walletClient.account.address]),
-      2n,
+      1n,
     )
 
-    // Old token still exists
-    assert.equal(
-      await support.read.ownerOf([1n]),
-      getAddress(walletClient.account.address),
-    )
+    // Token is reactivated with new tier
+    const [tier, active] = await support.read.currentTier([1n])
+    assert.equal(tier, 2)
+    assert.equal(active, true)
+
+    // tierPeriods reset to single entry
+    const segs = await support.read.tierPeriods([1n])
+    assert.equal(segs.length, 1)
+    assert.equal(segs[0].tier, 2)
   })
 
   it('Should return inactive for expired token', async function () {
@@ -584,7 +589,7 @@ describe('Support', async function () {
     )
   })
 
-  it("Should not overwrite receiver's active subscription on transfer", async function () {
+  it('Should revert transfer to address that already holds a token', async function () {
     const { support, hook } = await deploy()
 
     // Both wallets subscribe
@@ -596,27 +601,14 @@ describe('Support', async function () {
       account: otherWallet.account,
     })
 
-    // otherWallet has active token 2 (tier 2, 3 months)
-    assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
-      2n,
-    )
-
-    // Transfer token 1 to otherWallet — should NOT overwrite activeToken
-    await support.write.transferFrom([
-      walletClient.account.address,
-      otherWallet.account.address,
-      1n,
-    ])
-
-    // otherWallet's active subscription should still be token 2
-    assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
-      2n,
-    )
-    assert.equal(
-      await support.read.balanceOf([otherWallet.account.address]),
-      2n,
+    // Transfer to otherWallet who already has a token — should revert
+    await assert.rejects(
+      support.write.transferFrom([
+        walletClient.account.address,
+        otherWallet.account.address,
+        1n,
+      ]),
+      /OneTokenPerWallet/,
     )
   })
 
@@ -646,7 +638,7 @@ describe('Support', async function () {
     )
   })
 
-  it('Should not set activeToken when transferring expired NFT', async function () {
+  it('Should track expired token on transfer for future reuse', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
@@ -667,50 +659,30 @@ describe('Support', async function () {
       1n,
     ])
 
-    // Receiver should NOT get activeToken set
-    assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
-      0n,
-    )
     assert.equal(
       await support.read.ownerOf([1n]),
       getAddress(otherWallet.account.address),
     )
+
+    // Raw mapping tracks token for reuse, but no active subscription
+    assert.equal(
+      await support.read.activeToken([otherWallet.account.address]),
+      1n,
+    )
+    assert.equal(
+      await support.read.activeTokenOf([otherWallet.account.address]),
+      0n,
+    )
   })
 
-  it('Should promote another active token when activeToken is transferred', async function () {
+  it('Should mint new token when re-subscribing after transferring away', async function () {
     const { support, hook } = await deploy()
 
-    // Alice subscribes (token 1)
     await support.write.support([walletClient.account.address, 0, 3], {
       value: await readCost(support, [0, 3]),
     })
-    assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
-      1n,
-    )
 
-    // Bob subscribes (token 2) and transfers it to Alice
-    await support.write.support([otherWallet.account.address, 1, 3], {
-      value: await readCost(support, [1, 3]),
-      account: otherWallet.account,
-    })
-    await support.write.transferFrom(
-      [otherWallet.account.address, walletClient.account.address, 2n],
-      { account: otherWallet.account },
-    )
-
-    // Alice owns tokens 1 and 2, activeToken is still 1
-    assert.equal(
-      await support.read.balanceOf([walletClient.account.address]),
-      2n,
-    )
-    assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
-      1n,
-    )
-
-    // Alice transfers token 1 away — activeToken should fall back to token 2, not 0
+    // Transfer token to other wallet
     await support.write.transferFrom([
       walletClient.account.address,
       otherWallet.account.address,
@@ -718,10 +690,14 @@ describe('Support', async function () {
     ])
     assert.equal(
       await support.read.activeToken([walletClient.account.address]),
-      2n,
+      0n,
+    )
+    assert.equal(
+      await support.read.balanceOf([walletClient.account.address]),
+      0n,
     )
 
-    // Next support() call should extend token 2, not create token 3
+    // Re-subscribe — should mint a new token since wallet has none
     await support.write.support([walletClient.account.address, 1, 1], {
       value: await readCost(support, [1, 1]),
     })
@@ -730,6 +706,53 @@ describe('Support', async function () {
       await support.read.activeToken([walletClient.account.address]),
       2n,
     )
+    assert.equal(
+      await support.read.balanceOf([walletClient.account.address]),
+      1n,
+    )
+  })
+
+  it('Should reactivate transferred expired token when receiver subscribes', async function () {
+    const { support, priceFeed, hook } = await deploy()
+
+    await support.write.support([walletClient.account.address, 0, 1], {
+      value: await readCost(support, [0, 1]),
+    })
+
+    // Expire
+    await publicClient.request({
+      method: 'evm_increaseTime' as any,
+      params: [31 * 86400],
+    })
+    await publicClient.request({ method: 'evm_mine' as any, params: [] })
+    await priceFeed.write.setPrice([ETH_USD])
+
+    // Transfer expired token to other wallet
+    await support.write.transferFrom([
+      walletClient.account.address,
+      otherWallet.account.address,
+      1n,
+    ])
+
+    // Other wallet subscribes — should reactivate the transferred token
+    await support.write.support([otherWallet.account.address, 2, 1], {
+      value: await readCost(support, [2, 1]),
+      account: otherWallet.account,
+    })
+
+    assert.equal(await support.read.totalSupply(), 1n) // no new mint
+    assert.equal(
+      await support.read.activeToken([otherWallet.account.address]),
+      1n,
+    )
+    const [tier, active] = await support.read.currentTier([1n])
+    assert.equal(tier, 2)
+    assert.equal(active, true)
+
+    // tierPeriods reset
+    const segs = await support.read.tierPeriods([1n])
+    assert.equal(segs.length, 1)
+    assert.equal(segs[0].tier, 2)
   })
 
   it('Should revert unauthorized transfer', async function () {
@@ -1977,7 +2000,7 @@ describe('Support', async function () {
     assert.equal((await hook.read.activeTierHolders([0])).length, 0)
   })
 
-  it('Should not add receiver to tier if they already have an active token', async function () {
+  it('Should revert transfer to address that already holds a token (tier slots)', async function () {
     const wallets = await viem.getWalletClients()
     const { support, hook } = await deploy()
 
@@ -1993,21 +2016,14 @@ describe('Support', async function () {
       account: wallets[1].account,
     })
 
-    // Transfer token 1 to wallets[1] — their activeToken stays as token 2
-    await support.write.transferFrom(
-      [wallets[0].account.address, wallets[1].account.address, 1n],
-      { account: wallets[0].account },
+    // Transfer to wallets[1] who already has a token — reverts
+    await assert.rejects(
+      support.write.transferFrom(
+        [wallets[0].account.address, wallets[1].account.address, 1n],
+        { account: wallets[0].account },
+      ),
+      /OneTokenPerWallet/,
     )
-
-    assert.equal(
-      await support.read.activeToken([wallets[1].account.address]),
-      2n,
-    )
-
-    // wallets[0] removed from tier, wallets[1] still there (already was)
-    const holders = await hook.read.tierHolders([2])
-    assert.equal(holders.length, 1)
-    assert.equal(holders[0], getAddress(wallets[1].account.address))
   })
 
   it('Should allow Alice to resubscribe after transferring away her active token', async function () {
@@ -2042,111 +2058,37 @@ describe('Support', async function () {
     assert.equal(active.length, 2)
   })
 
-  it('Should keep expired activeToken pointers from hiding another active subscription', async function () {
-    const { support, hook } = await deploy()
-
-    await hook.write.setMaxSlots([2, 1])
-
-    await support.write.support([walletClient.account.address, 0, 1], {
-      value: await readCost(support, [0, 1]),
-    })
-    await support.write.support([otherWallet.account.address, 2, 3], {
-      value: await readCost(support, [2, 3]),
-      account: otherWallet.account,
-    })
-    await support.write.transferFrom(
-      [otherWallet.account.address, walletClient.account.address, 2n],
-      { account: otherWallet.account },
-    )
-
-    assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
-      1n,
-    )
-
-    await publicClient.request({
-      method: 'evm_increaseTime' as any,
-      params: [31 * 86400],
-    })
-    await publicClient.request({ method: 'evm_mine' as any, params: [] })
-
-    const active = await hook.read.activeTierHolders([2])
-    assert.equal(active.length, 1)
-    assert.equal(active[0], getAddress(walletClient.account.address))
-  })
-
-  it('Should extend the surviving active token after the selected pointer expires', async function () {
+  it('Should reset tierPeriods on re-subscribe after expiry', async function () {
     const { support, priceFeed, hook } = await deploy()
 
-    await support.write.support([walletClient.account.address, 0, 1], {
-      value: await readCost(support, [0, 1]),
+    // Subscribe tier 0, upgrade to tier 2
+    await support.write.support([walletClient.account.address, 0, 2], {
+      value: await readCost(support, [0, 2]),
     })
-    await support.write.support([otherWallet.account.address, 2, 3], {
-      value: await readCost(support, [2, 3]),
-      account: otherWallet.account,
-    })
-    await support.write.transferFrom(
-      [otherWallet.account.address, walletClient.account.address, 2n],
-      { account: otherWallet.account },
-    )
-
-    await publicClient.request({
-      method: 'evm_increaseTime' as any,
-      params: [31 * 86400],
-    })
-    await publicClient.request({ method: 'evm_mine' as any, params: [] })
-    await priceFeed.write.setPrice([ETH_USD])
-
-    const expiryBefore = await support.read.expiresAt([2n])
     await support.write.support([walletClient.account.address, 2, 1], {
-      value: await readCost(support, [2, 1]),
+      value: parseEther('1'),
     })
 
-    assert.equal(await support.read.totalSupply(), 2n)
-    assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
-      2n,
-    )
-    assert.equal(
-      await support.read.expiresAt([2n]),
-      expiryBefore + 30n * 24n * 60n * 60n,
-    )
-  })
+    let segs = await support.read.tierPeriods([1n])
+    assert.equal(segs.length, 2)
 
-  it('Should keep tier slots full when a different owned token remains active', async function () {
-    const wallets = await viem.getWalletClients()
-    const { support, priceFeed, hook } = await deploy()
-
-    await hook.write.setMaxSlots([2, 1])
-    const cost2 = await readCost(support, [2, 1])
-
-    await support.write.support([wallets[0].account.address, 0, 1], {
-      value: await readCost(support, [0, 1]),
-      account: wallets[0].account,
-    })
-    await support.write.support([wallets[1].account.address, 2, 3], {
-      value: await readCost(support, [2, 3]),
-      account: wallets[1].account,
-    })
-    await support.write.transferFrom(
-      [wallets[1].account.address, wallets[0].account.address, 2n],
-      { account: wallets[1].account },
-    )
-
+    // Expire
     await publicClient.request({
       method: 'evm_increaseTime' as any,
-      params: [31 * 86400],
+      params: [120 * 86400],
     })
     await publicClient.request({ method: 'evm_mine' as any, params: [] })
     await priceFeed.write.setPrice([ETH_USD])
 
-    await assert.rejects(
-      support.write.support([wallets[2].account.address, 2, 1], {
-        value: cost2,
-        account: wallets[2].account,
-      }),
-      /SubscriptionBlocked/,
-    )
+    // Re-subscribe at tier 1
+    await support.write.support([walletClient.account.address, 1, 1], {
+      value: await readCost(support, [1, 1]),
+    })
+
+    // tierPeriods should be reset to single entry
+    segs = await support.read.tierPeriods([1n])
+    assert.equal(segs.length, 1)
+    assert.equal(segs[0].tier, 1)
   })
 
   // --- Invalid price ---
@@ -2260,7 +2202,7 @@ describe('BaseSupport', async function () {
     )
   })
 
-  it('Should create new subscription ID after expiry', async function () {
+  it('Should reuse subscription ID after expiry', async function () {
     const { support, priceFeed } = await deployBase()
     const cost = await readCost(support, [0, 1])
 
@@ -2277,14 +2219,19 @@ describe('BaseSupport', async function () {
     await publicClient.request({ method: 'evm_mine' as any, params: [] })
     await priceFeed.write.setPrice([ETH_USD])
 
-    // New subscription gets a new ID
+    // Re-subscribe — reuses same ID
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,
     })
-    assert.equal(await support.read.totalSupply(), 2n)
+    assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
       await support.read.activeToken([walletClient.account.address]),
-      2n,
+      1n,
     )
+
+    // tierPeriods reset
+    const segs = await support.read.tierPeriods([1n])
+    assert.equal(segs.length, 1)
+    assert.equal(segs[0].tier, 0)
   })
 })
