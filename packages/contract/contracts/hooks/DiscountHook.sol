@@ -29,12 +29,9 @@ contract DiscountHook is ISubscriptionHook, Ownable {
 
     function _applyDiscount(uint32 duration, uint256 baseUSD) internal view returns (Adjustments memory adj) {
         adj.adjustedDuration = duration;
-        adj.adjustedStart = 0;
-        if (duration >= minMonths && minMonths > 0) {
-            adj.adjustedUSD = baseUSD * (100 - percentOff) / 100;
-        } else {
-            adj.adjustedUSD = baseUSD;
-        }
+        adj.adjustedUSD = (duration >= minMonths && minMonths > 0)
+            ? baseUSD * (100 - percentOff) / 100
+            : baseUSD;
     }
 
     function canSubscribe(uint8, address) external pure virtual override returns (bool) {
