@@ -9,7 +9,10 @@
     "db": "ponder db",
     "codegen": "ponder codegen",
     "lint": "eslint .",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "kamal:setup": "set -a && . ./.env.production && set +a && kamal setup",
+    "kamal:deploy": "set -a && . ./.env.production && set +a && kamal deploy",
+    "kamal:sh": "set -a && . ./.env.production && set +a && kamal app exec -i --reuse sh"
   },
   "dependencies": {
     "ponder": "^0.16.3",

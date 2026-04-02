@@ -1,0 +1,18 @@
+FROM node:24-alpine AS base
+RUN npm install -g corepack && corepack enable && corepack prepare pnpm@latest --activate
+WORKDIR /app
+
+FROM base AS deps
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY packages/indexer/package.json ./packages/indexer/
+RUN pnpm install --frozen-lockfile --filter @1001-digital/support-indexer
+
+FROM base AS production
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/packages/indexer/node_modules ./packages/indexer/node_modules
+COPY packages/indexer ./packages/indexer
+WORKDIR /app/packages/indexer
+RUN pnpm codegen
+
+EXPOSE 42069
+CMD pnpm start --schema=${DATABASE_SCHEMA:-ponder} --views-schema=${PONDER_VIEWS_SCHEMA:-support}
