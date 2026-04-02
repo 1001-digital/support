@@ -239,17 +239,14 @@ export const SupportAbi = [
   },
   {
     type: 'function',
-    name: 'startedAt',
+    name: 'subscriptions',
     stateMutability: 'view',
     inputs: [{ name: '', type: 'uint256' }],
-    outputs: [{ name: '', type: 'uint64' }],
-  },
-  {
-    type: 'function',
-    name: 'expiresAt',
-    stateMutability: 'view',
-    inputs: [{ name: '', type: 'uint256' }],
-    outputs: [{ name: '', type: 'uint64' }],
+    outputs: [
+      { name: 'createdAt', type: 'uint64' },
+      { name: 'startedAt', type: 'uint64' },
+      { name: 'expiresAt', type: 'uint64' },
+    ],
   },
   {
     type: 'function',
