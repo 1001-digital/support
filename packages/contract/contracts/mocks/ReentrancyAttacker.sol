@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-interface ISupport {
-    function support(address recipient, uint8 tier, uint32 duration) external payable;
-}
+import {ISupport} from "../interfaces/ISupport.sol";
 
 /// @dev Attempts reentrancy through the excess-refund path in support().
 contract ReentrancyAttacker {

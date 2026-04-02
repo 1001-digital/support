@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {HasPriceFeed, AggregatorV3Interface} from "@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol";
 import {WithSaleStart} from "@1001-digital/erc721-extensions/contracts/WithSaleStart.sol";
-import {TierPeriod} from "./interfaces/ISupportRenderer.sol";
+import {TierPeriod} from "./interfaces/Types.sol";
 import {ISubscriptionHook} from "./interfaces/ISubscriptionHook.sol";
 
 /**

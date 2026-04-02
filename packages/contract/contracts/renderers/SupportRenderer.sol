@@ -5,7 +5,8 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
 import {WithENSReverseLookup} from "@1001-digital/erc721-extensions/contracts/WithENSReverseLookup.sol";
-import {ISupportRenderer, TierPeriod} from "../interfaces/ISupportRenderer.sol";
+import {ISupportRenderer} from "../interfaces/ISupportRenderer.sol";
+import {TierPeriod} from "../interfaces/Types.sol";
 
 contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
 

@@ -4,7 +4,8 @@ pragma solidity ^0.8.28;
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {OnePerWallet} from "@1001-digital/erc721-extensions/contracts/OnePerWallet.sol";
 import {Support} from "../Support.sol";
-import {ISupportRenderer, TierPeriod} from "../interfaces/ISupportRenderer.sol";
+import {ISupportRenderer} from "../interfaces/ISupportRenderer.sol";
+import {TierPeriod} from "../interfaces/Types.sol";
 import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 /// @title WithSupportTokens
@@ -61,10 +62,6 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
         });
 
         return renderer.tokenURI(data);
-    }
-
-    function totalSupply() public view override returns (uint256) {
-        return _tokenIdCounter;
     }
 
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {

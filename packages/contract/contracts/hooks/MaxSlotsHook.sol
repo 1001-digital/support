@@ -3,11 +3,7 @@ pragma solidity ^0.8.28;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
-
-interface ISupportRead {
-    function subscription(address subscriber) external view returns (uint256);
-    function currentTier(uint256 tokenId) external view returns (uint8 tier, bool active);
-}
+import {ISupport} from "../interfaces/ISupport.sol";
 
 /// @title MaxSlotsHook
 /// @notice Enforces a maximum number of active subscribers per tier.
@@ -134,9 +130,9 @@ contract MaxSlotsHook is ISubscriptionHook, Ownable {
     }
 
     function _isActiveOnTier(address holder, uint8 tier) internal view returns (bool) {
-        uint256 tokenId = ISupportRead(support).subscription(holder);
+        uint256 tokenId = ISupport(support).subscription(holder);
         if (tokenId == 0) return false;
-        (uint8 t, bool active) = ISupportRead(support).currentTier(tokenId);
+        (uint8 t, bool active) = ISupport(support).currentTier(tokenId);
         return active && t == tier;
     }
 }
