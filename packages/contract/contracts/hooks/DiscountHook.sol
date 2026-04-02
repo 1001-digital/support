@@ -23,7 +23,11 @@ contract DiscountHook is ISubscriptionHook, Ownable {
 
     function beforeSubscribe(
         uint8, uint32 duration, uint256 baseUSD, address, bool, uint8
-    ) external view override returns (Adjustments memory adj) {
+    ) external view virtual override returns (Adjustments memory adj) {
+        return _applyDiscount(duration, baseUSD);
+    }
+
+    function _applyDiscount(uint32 duration, uint256 baseUSD) internal view returns (Adjustments memory adj) {
         adj.adjustedDuration = duration;
         adj.adjustedStart = 0;
         if (duration >= minMonths && minMonths > 0) {
@@ -33,12 +37,12 @@ contract DiscountHook is ISubscriptionHook, Ownable {
         }
     }
 
-    function canSubscribe(uint8, address) external pure override returns (bool) {
+    function canSubscribe(uint8, address) external pure virtual override returns (bool) {
         return true;
     }
 
-    function onSubscribe(uint8, address) external override {}
-    function onRelease(uint8, address) external override {}
+    function onSubscribe(uint8, address) external virtual override {}
+    function onRelease(uint8, address) external virtual override {}
 
     function setDiscount(uint16 _minMonths, uint16 _percentOff) external onlyOwner {
         if (_percentOff > 100) revert InvalidDiscount();
