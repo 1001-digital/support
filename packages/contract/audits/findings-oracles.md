@@ -1,211 +1,319 @@
 # Oracle & Pricing Security Audit Findings
 
-**Scope**: `Support.sol`, `SupportToken.sol`, `HasPriceFeed.sol`, `DiscountHook.sol`, `MaxSlotsHook.sol`, `ISubscriptionHook.sol`
-**Checklist**: `evm-audit-oracles`
+**Scope**: Support.sol, SupportToken.sol, WithSupportTokens.sol, HasPriceFeed.sol (dependency), and associated hooks/interfaces.
+
+**Auditor**: Claude (evm-audit-oracles checklist)
+
 **Date**: 2026-04-02
 
 ---
 
-## [O-1] Missing `startedAt == 0` validation allows uninitialized round data
+## Checklist Walkthrough
+
+The contracts use a single Chainlink ETH/USD price feed (via the `HasPriceFeed` abstract contract from `@1001-digital/erc721-extensions`) to convert USD-denominated tier prices into ETH amounts. The core conversion happens in `_usdToEth()` at `HasPriceFeed.sol:35-41`, which is called by `_baseCost()` at `Support.sol:348-351`.
+
+### Items that apply and have findings:
+
+1. **Staleness & Liveness** -- Partial checks present, but missing `startedAt == 0` check. See [O-1].
+2. **Answer Bounds (minAnswer/maxAnswer)** -- No circuit breaker check. See [O-2].
+3. **L2 Sequencer Uptime** -- Not applicable currently (hardhat config shows L1 mainnet/sepolia deployment), but no protection if deployed to L2. See [O-3].
+4. **Feed Decimals** -- Hardcoded assumption of 8 decimals. See [O-4].
+5. **Single Oracle Dependency** -- No fallback oracle. See [O-5].
+6. **Hardcoded Staleness Threshold** -- 1 hour hardcoded, problematic for multi-chain. See [O-6].
+7. **Unhandled Oracle Revert / DoS** -- No try/catch. See [O-7].
+
+### Items that apply and have NO issues:
+
+- **Negative prices**: `HasPriceFeed.sol:38` checks `price <= 0`, which correctly rejects both zero and negative prices.
+- **Price = 0**: Same check covers this case.
+- **`answeredInRound < roundId`**: `HasPriceFeed.sol:39` correctly checks `answeredInRound < roundId`.
+- **`updatedAt` staleness**: `HasPriceFeed.sol:40` checks `block.timestamp - updatedAt > _maxStaleness()`.
+- **Deprecated feeds**: `setPriceFeed()` at `HasPriceFeed.sol:27-31` allows the owner to update the price feed address. This mitigates the deprecated feed risk.
+- **Price peg assumptions**: The protocol only uses ETH/USD pricing for native ETH payments. No WBTC, stETH, or stablecoin peg assumptions.
+- **Spot price manipulation**: Not applicable -- the protocol uses Chainlink, not AMM spot prices.
+- **TWAP oracles**: Not used.
+- **Pyth Network**: Not used.
+- **Read-only reentrancy on Balancer/Curve**: Not applicable.
+- **Multi-hop price derivation**: Not applicable -- single ETH/USD feed.
+- **Oracle front-running**: Low impact here because the protocol is a subscription system, not a lending/trading protocol. The worst case is a user paying slightly more/less ETH for a fixed USD subscription. The economic incentive to front-run is minimal.
+
+---
+
+## [O-1] Missing `startedAt == 0` validation on Chainlink round data
+
 **Severity**: Low
+
 **Category**: evm-audit-oracles
+
 **Location**: `_usdToEth()` in `HasPriceFeed.sol:36-41`
-**Description**: The `_usdToEth()` function calls `priceFeed.latestRoundData()` and destructures the result, but discards `startedAt` entirely (line 36: `(uint80 roundId, int256 price, , uint256 updatedAt, uint80 answeredInRound)`). A round with `startedAt == 0` means the round has not actually started and should be considered invalid. While the existing `answeredInRound < roundId` and staleness checks provide partial protection, they do not cover the edge case of an uninitialized round where `startedAt` is zero but other fields pass validation.
-**Proof of Concept**:
-1. Chainlink feed enters a state where a new round is initiated but `startedAt` remains 0 (round not yet populated).
-2. If `answeredInRound == roundId` and `updatedAt` is within the staleness window (carried from a prior state), the check passes.
-3. The contract uses potentially invalid price data for the USD-to-ETH conversion.
-**Recommendation**: Add a `startedAt > 0` check in `_usdToEth()`:
+
+**Description**: The `_usdToEth()` function calls `priceFeed.latestRoundData()` and validates `price <= 0`, `answeredInRound < roundId`, and staleness via `updatedAt`. However, it does not check whether `startedAt == 0`. A `startedAt` value of zero indicates the round has not actually started and no valid price update has occurred for this round. While this is an edge case (Chainlink would typically not return `startedAt == 0` in production), it is a best-practice validation that other checks may not fully cover.
+
+The current code at `HasPriceFeed.sol:36-40`:
 ```solidity
-function _usdToEth(uint256 usdAmount) internal view virtual returns (uint256) {
-    (uint80 roundId, int256 price, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
-        = priceFeed.latestRoundData();
-    if (price <= 0) revert StalePrice();
-    if (startedAt == 0) revert StalePrice();
-    if (answeredInRound < roundId) revert StalePrice();
-    if (block.timestamp - updatedAt > _maxStaleness()) revert StalePrice();
-    return usdAmount * 1e18 / uint256(price);
-}
+(uint80 roundId, int256 price, , uint256 updatedAt, uint80 answeredInRound)
+    = priceFeed.latestRoundData();
+if (price <= 0) revert StalePrice();
+if (answeredInRound < roundId) revert StalePrice();
+if (block.timestamp - updatedAt > _maxStaleness()) revert StalePrice();
+```
+
+Note that the `startedAt` return value (third positional) is explicitly discarded with `,`.
+
+**Proof of Concept**: If Chainlink returns a round where `startedAt == 0` but `price > 0` and `answeredInRound >= roundId` and `updatedAt` is recent, the function would accept this potentially invalid round data. This is a theoretical edge case.
+
+**Recommendation**: Capture and validate `startedAt`:
+```solidity
+(uint80 roundId, int256 price, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)
+    = priceFeed.latestRoundData();
+if (price <= 0) revert StalePrice();
+if (startedAt == 0) revert StalePrice();
+if (answeredInRound < roundId) revert StalePrice();
+if (block.timestamp - updatedAt > _maxStaleness()) revert StalePrice();
 ```
 
 ---
 
-## [O-2] No `minAnswer` / `maxAnswer` circuit breaker check
-**Severity**: Medium
-**Category**: evm-audit-oracles
-**Location**: `_usdToEth()` in `HasPriceFeed.sol:35-42`
-**Description**: Chainlink aggregator feeds have hard-coded `minAnswer` and `maxAnswer` bounds. When the real market price falls below `minAnswer` (or exceeds `maxAnswer`), the feed clamps to the boundary value instead of reporting the actual price. The `_usdToEth()` function only checks `price <= 0` but does not verify that the returned price is not pinned at a circuit breaker boundary. For the ETH/USD feed, if ETH were to crash below the feed's `minAnswer`, the contract would still use `minAnswer` as the price, making subscriptions cheaper than they should be (users pay less ETH than the real market value of their USD subscription). Conversely, if ETH price exceeds `maxAnswer`, the contract would charge users more ETH than necessary.
-**Proof of Concept**:
-1. ETH price crashes to $50, but the Chainlink ETH/USD feed has `minAnswer = $100`.
-2. The feed reports $100 instead of $50.
-3. A user subscribing at $5/month pays 0.05 ETH (at the reported $100 price) instead of 0.1 ETH (at the real $50 price).
-4. The project owner receives half the expected ETH value for subscriptions.
-**Recommendation**: Query the aggregator's `minAnswer` and `maxAnswer` and validate the returned price is not at the boundary. Override `_usdToEth()` in `Support.sol`:
-```solidity
-import {AggregatorV2V3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV2V3Interface.sol";
+## [O-2] No Chainlink `minAnswer`/`maxAnswer` circuit breaker check
 
-// In _usdToEth override or a wrapper:
-IAggregatorV3 aggregator = IAggregatorV3(priceFeed.aggregator());
+**Severity**: Medium
+
+**Category**: evm-audit-oracles
+
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:35-41`
+
+**Description**: Chainlink price feeds have hardcoded `minAnswer` and `maxAnswer` bounds in their aggregator contracts. During extreme market events (flash crashes or parabolic pumps), if the real ETH price moves beyond these bounds, the feed will report the bound value instead of the actual price.
+
+For example, if ETH crashes to $50 but the feed's `minAnswer` corresponds to $100, Chainlink would still report $100. In this protocol, the `_usdToEth()` conversion at line 41 would then compute a subscription cost based on $100/ETH instead of $50/ETH, meaning subscribers pay roughly half of what they should in ETH terms. Conversely, if ETH moons past the `maxAnswer`, the feed caps the price, and subscribers would overpay in ETH.
+
+While this is a subscription protocol (not a lending protocol where this could lead to direct fund theft), it still causes incorrect pricing that could result in the owner receiving substantially less ETH value than intended for subscriptions.
+
+**Proof of Concept**:
+1. ETH price crashes from $2000 to $50 (extreme but not unprecedented -- LUNA-style event).
+2. Chainlink feed reports `minAnswer` (e.g., equivalent to $100) instead of $50.
+3. A user calls `support()` for a $10/month tier.
+4. `_usdToEth(1000000000)` computes `1000000000 * 1e18 / 10000000000 = 0.1 ETH` (at $100).
+5. The actual value of 0.1 ETH at $50 is only $5, not $10. The protocol receives half the intended USD value.
+
+**Recommendation**: Read the aggregator's `minAnswer` and `maxAnswer` and validate:
+```solidity
+// Cache the aggregator reference
+IChainlinkAggregator aggregator = IChainlinkAggregator(address(priceFeed));
 int192 minAnswer = aggregator.minAnswer();
 int192 maxAnswer = aggregator.maxAnswer();
-if (price <= minAnswer || price >= maxAnswer) revert StalePrice();
+require(price > minAnswer && price < maxAnswer, "Circuit breaker triggered");
 ```
-Note: The severity is Medium rather than High because the protocol collects subscription fees rather than managing collateral/lending positions, limiting the economic impact to degraded revenue for the project owner.
+Alternatively, since the `AggregatorV3Interface` defined in `HasPriceFeed.sol:50-58` is minimal and does not expose `minAnswer()`/`maxAnswer()`, the owner could monitor off-chain and pause the contract or swap the feed if circuit breakers are hit.
 
 ---
 
-## [O-3] Hardcoded feed decimals assumption (`1e18 / uint256(price)`) assumes 8-decimal feed
-**Severity**: Medium
-**Category**: evm-audit-oracles
-**Location**: `_usdToEth()` in `HasPriceFeed.sol:41`
-**Description**: The conversion formula `usdAmount * 1e18 / uint256(price)` implicitly assumes the price feed uses the same decimal precision as the `usdAmount` (which is set via `tierPrices`, using 8 decimals per the test configuration: e.g., `500000000` = $5.00 in 8-decimal format). The Chainlink ETH/USD feed does use 8 decimals, so the math works: `(5 * 1e8) * 1e18 / (2000 * 1e8) = 0.0025e18 = 0.0025 ETH`. However, the contract never calls `priceFeed.decimals()` to verify this assumption. If the price feed is changed (via `setPriceFeed()`) to one with different decimal precision (e.g., 18 decimals), the conversion would be off by a factor of 10^10, resulting in users paying drastically incorrect amounts. The `AggregatorV3Interface` defined in `HasPriceFeed.sol` (lines 50-58) does not even include a `decimals()` function, making it impossible to query.
-**Proof of Concept**:
-1. Owner calls `setPriceFeed()` with a feed address that returns 18-decimal prices (some specialized feeds do this).
-2. ETH/USD at $2000 would be returned as `2000 * 1e18` instead of `2000 * 1e8`.
-3. The formula computes `500000000 * 1e18 / (2000 * 1e18) = 250000000` wei = 0.00000000025 ETH for a $5 subscription instead of 0.0025 ETH.
-4. Users pay 10 billion times less than intended.
-**Recommendation**: Add `decimals()` to the `AggregatorV3Interface` and normalize the price dynamically:
-```solidity
-interface AggregatorV3Interface {
-    function latestRoundData() external view returns (
-        uint80 roundId, int256 answer, uint256 startedAt,
-        uint256 updatedAt, uint80 answeredInRound
-    );
-    function decimals() external view returns (uint8);
-}
+## [O-3] No L2 sequencer uptime check for potential L2 deployment
 
+**Severity**: Low
+
+**Category**: evm-audit-oracles
+
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:35-41` and `hardhat.config.ts`
+
+**Description**: The current `hardhat.config.ts` only defines L1 networks (`mainnet`, `sepolia`), so the protocol appears to target Ethereum mainnet. However, there is no on-chain enforcement preventing deployment to an L2 (Arbitrum, Optimism, Base, etc.), and the `HasPriceFeed` contract has no L2 sequencer uptime check.
+
+If deployed on an L2 where the sequencer goes down, Chainlink price feeds stop updating. When the sequencer restarts, the first `latestRoundData()` call may return a stale price from before the outage. Users could subscribe at an outdated ETH/USD price, potentially paying significantly less (or more) than intended.
+
+The 1-hour staleness check in `_maxStaleness()` would catch some cases, but on L2s like Arbitrum, the ETH/USD feed has a 24-hour heartbeat, meaning a 1-hour staleness threshold would cause constant reverts under normal operation (see [O-6]).
+
+**Proof of Concept**: Not currently exploitable since the protocol targets L1. This is a latent risk if the protocol is deployed to L2s in the future without modification.
+
+**Recommendation**: If L2 deployment is planned, add a sequencer uptime feed check with a grace period:
+```solidity
+AggregatorV3Interface sequencerFeed = AggregatorV3Interface(SEQUENCER_UPTIME_FEED);
+(, int256 answer, uint256 startedAt,,) = sequencerFeed.latestRoundData();
+if (answer != 0) revert SequencerDown();
+if (block.timestamp - startedAt < GRACE_PERIOD) revert GracePeriodNotOver();
+```
+
+---
+
+## [O-4] Hardcoded 8-decimal assumption for price feed
+
+**Severity**: Low
+
+**Category**: evm-audit-oracles
+
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:41` and tier price definitions in `Support.sol:61`
+
+**Description**: The `_usdToEth()` function at `HasPriceFeed.sol:41` performs:
+```solidity
+return usdAmount * 1e18 / uint256(price);
+```
+
+This implicitly assumes the price feed returns 8-decimal values (which is correct for Chainlink ETH/USD). The tier prices are also stored in 8-decimal format (e.g., `500000000` = $5.00 in the test file at `test/Support.ts:14`).
+
+The NatSpec comment at `HasPriceFeed.sol:33-34` states: "The `usdAmount` must use the same decimal precision as the price feed (8 decimals for Chainlink ETH/USD)." While this is documented, the code does not call `priceFeed.decimals()` to dynamically determine the feed's precision. If `setPriceFeed()` is called with a feed that uses different decimals (e.g., 18 decimals as some feeds do), the conversion would be off by a factor of 10^10, causing subscriptions to cost 10 billion times too little or too much ETH.
+
+The `setPriceFeed()` function at `HasPriceFeed.sol:27-31` only validates `_priceFeed != address(0)` -- it does not verify the new feed uses 8 decimals.
+
+**Proof of Concept**:
+1. Owner calls `setPriceFeed()` with a feed that uses 18 decimals.
+2. Feed returns `price = 2000 * 1e18 = 2000000000000000000000`.
+3. `_usdToEth(500000000)` computes `500000000 * 1e18 / 2000000000000000000000 = 250000000000000` wei = 0.00025 ETH instead of the intended 0.0025 ETH.
+4. Subscribers pay 10x less than intended.
+
+**Recommendation**: Either query `priceFeed.decimals()` and normalize dynamically, or add a decimals check in `setPriceFeed()`:
+```solidity
+function setPriceFeed(address _priceFeed) public virtual onlyOwner {
+    if (_priceFeed == address(0)) revert InvalidPriceFeed();
+    AggregatorV3Interface feed = AggregatorV3Interface(_priceFeed);
+    // Optionally: require(feed.decimals() == 8, "Unexpected decimals");
+    priceFeed = feed;
+    emit PriceFeedUpdated(_priceFeed);
+}
+```
+
+Or normalize dynamically:
+```solidity
 function _usdToEth(uint256 usdAmount) internal view virtual returns (uint256) {
     // ... staleness checks ...
-    uint8 feedDecimals = priceFeed.decimals();
-    return usdAmount * 1e18 / uint256(price) * 10**feedDecimals / 10**8;
-    // Or more precisely: normalize usdAmount and price to same base
+    uint8 decimals = priceFeed.decimals();
+    return usdAmount * 1e18 / uint256(price) * 10**8 / 10**decimals;
 }
 ```
-Alternatively, validate on `setPriceFeed()` that the new feed uses 8 decimals.
+
+Note: The `AggregatorV3Interface` defined in `HasPriceFeed.sol:50-58` does not include a `decimals()` function. It would need to be extended.
 
 ---
 
-## [O-4] Hardcoded 1-hour staleness threshold will fail on L2 deployments
-**Severity**: Medium
-**Category**: evm-audit-oracles
-**Location**: `_maxStaleness()` in `HasPriceFeed.sol:45-47`
-**Description**: The `_maxStaleness()` function returns a hardcoded `1 hours` (3600 seconds). While this is appropriate for the Chainlink ETH/USD feed on Ethereum mainnet (which has a 1-hour heartbeat), the same feed on L2 networks like Arbitrum or Base has a 24-hour heartbeat. If the contract is deployed to an L2 without overriding `_maxStaleness()`, every call to `_usdToEth()` will revert with `StalePrice()` after 1 hour from the last feed update, because the feed legitimately only updates every 24 hours (or upon a deviation threshold). The hardhat config currently only defines L1 networks (mainnet, sepolia), but the `Support` contract is `abstract` and designed for reuse, making L2 deployment a realistic future scenario.
-**Proof of Concept**:
-1. Deploy `SupportToken` on Arbitrum with the Arbitrum ETH/USD Chainlink feed (24h heartbeat).
-2. The feed updates at T=0.
-3. At T=1h+1s, a user calls `support()`.
-4. `_usdToEth()` checks `block.timestamp - updatedAt > 3600` which is true.
-5. The call reverts with `StalePrice()`, making the contract unusable for 23 out of every 24 hours.
-**Recommendation**: The `_maxStaleness()` function is already `virtual`, which is good. Either:
-1. Override it in `Support.sol` to accept a constructor parameter for the staleness threshold, or
-2. Add deployment documentation specifying that L2 deployments must override `_maxStaleness()`.
-```solidity
-// Option 1: Make staleness configurable in Support.sol
-uint256 private immutable _stalenessThreshold;
+## [O-5] Single oracle dependency with no fallback
 
-constructor(..., uint256 stalenessThreshold_) {
-    _stalenessThreshold = stalenessThreshold_;
+**Severity**: Low
+
+**Category**: evm-audit-oracles
+
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:35-41`, `_baseCost()` in `Support.sol:348-351`
+
+**Description**: The entire pricing mechanism depends on a single Chainlink price feed. If this feed is deprecated, access-restricted (Chainlink multisigs can block access), or consistently stale, all calls to `support()` and `estimate()` will revert, causing a complete denial of service for new subscriptions and renewals.
+
+The `_usdToEth()` function reverts on stale price (`StalePrice` error) but provides no fallback mechanism. This means:
+- `support()` at `Support.sol:112` will revert (via `_baseCost()` -> `_usdToEth()`)
+- `estimate()` at `Support.sol:181` will revert
+- Only `grant()` at `Support.sol:162` would still work since it does not call `_baseCost()`
+
+The `setPriceFeed()` function allows the owner to update the feed address, which is a good mitigation, but it cannot be called atomically when the feed goes down -- there is an unavoidable downtime window.
+
+**Proof of Concept**:
+1. Chainlink deprecates or access-restricts the configured ETH/USD feed.
+2. `priceFeed.latestRoundData()` reverts.
+3. All `support()` calls revert.
+4. No new paid subscriptions can be created until the owner calls `setPriceFeed()` with a new valid feed.
+5. Depending on the owner's response time, this could be hours of downtime.
+
+**Recommendation**: For a subscription protocol, the impact is limited (users cannot subscribe temporarily but no funds are at risk). The existing `setPriceFeed()` function provides adequate mitigation for this use case. For added resilience, consider wrapping the Chainlink call in a try/catch with a cached fallback price (see [O-7]).
+
+---
+
+## [O-6] Hardcoded 1-hour staleness threshold may be too strict or too lenient depending on chain
+
+**Severity**: Low
+
+**Category**: evm-audit-oracles
+
+**Location**: `_maxStaleness()` in `HasPriceFeed.sol:45-47`
+
+**Description**: The `_maxStaleness()` function returns a hardcoded `1 hours` (3600 seconds). The Chainlink ETH/USD feed on Ethereum mainnet has a 1-hour heartbeat, so this is correct for mainnet. However:
+
+1. On Arbitrum, the ETH/USD feed has a ~24-hour heartbeat with a 0.5% deviation threshold. A 1-hour staleness check would cause constant `StalePrice` reverts during periods of low volatility where the price doesn't move 0.5% within an hour.
+2. On some L2s, feed update frequency varies. A single hardcoded value cannot be correct across chains.
+
+The function is declared `virtual`, so it can be overridden by child contracts, which is good. But the current concrete deployment (`SupportToken.sol`) does not override it.
+
+**Proof of Concept**: If the same `SupportToken` contract is deployed on Arbitrum without overriding `_maxStaleness()`:
+1. ETH price is stable, so Chainlink only updates every ~24 hours on Arbitrum.
+2. After 1 hour without an update, `block.timestamp - updatedAt > 3600` becomes true.
+3. Every `support()` call reverts with `StalePrice()`.
+4. The protocol is DoS'd until the next Chainlink update.
+
+**Recommendation**: Since `_maxStaleness()` is already virtual, this is well-designed for L1. For multi-chain deployment, override `_maxStaleness()` per-chain or make it a configurable storage variable:
+```solidity
+uint256 public maxStaleness = 1 hours;
+
+function setMaxStaleness(uint256 _maxStaleness) external onlyOwner {
+    require(_maxStaleness > 0 && _maxStaleness <= 24 hours, "Invalid staleness");
+    maxStaleness = _maxStaleness;
 }
 
 function _maxStaleness() internal view override returns (uint256) {
-    return _stalenessThreshold;
+    return maxStaleness;
 }
 ```
 
 ---
 
-## [O-5] No L2 sequencer uptime check
+## [O-7] Unhandled Chainlink revert causes complete subscription DoS
+
 **Severity**: Medium
+
 **Category**: evm-audit-oracles
-**Location**: `_usdToEth()` in `HasPriceFeed.sol:35-42`
-**Description**: When deployed on L2 chains (Arbitrum, Optimism, Base), the Chainlink price feed can return stale prices if the L2 sequencer goes down and comes back up. The `_usdToEth()` function does not check the L2 sequencer uptime feed. After a sequencer restart, the price feed may still show the pre-downtime price, which could be significantly different from the current market price. This affects all payment calculations in `Support.sol`. While the hardhat config currently only defines L1 networks, the abstract architecture of `Support.sol` is designed for reuse across chains.
+
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:36-37`, `_baseCost()` in `Support.sol:348-351`
+
+**Description**: The call to `priceFeed.latestRoundData()` at `HasPriceFeed.sol:36-37` is not wrapped in a `try/catch`. Chainlink multisigs have the ability to block access to price feeds, and feeds can also revert during contract migrations or when deprecated. If `latestRoundData()` reverts, the entire `_usdToEth()` call reverts, which propagates up through `_baseCost()` to `support()` and `estimate()`.
+
+This means a Chainlink-side revert (not a stale price, but an actual revert of the external call) will brick all paid subscription functionality with no graceful degradation.
+
+While `setPriceFeed()` allows the owner to swap to a different feed, there is no way to use the protocol during the window between the feed going down and the owner's corrective action.
+
 **Proof of Concept**:
-1. Deploy on Arbitrum. ETH is at $2000. Sequencer goes down.
-2. While sequencer is down, ETH drops to $1500 on other markets.
-3. Sequencer comes back online. The Chainlink feed still reports $2000 until oracles update.
-4. A user subscribes immediately after sequencer restart. They pay based on $2000 ETH (less ETH) when the real price is $1500 (should pay more ETH).
-5. The project owner receives less value than expected.
-**Recommendation**: For L2 deployments, integrate a sequencer uptime check with a grace period. Override `_usdToEth()` in an L2-specific subcontract:
+1. Chainlink access-controls the ETH/USD feed (they have done this before -- see Code4rena Inverse Finance finding).
+2. `priceFeed.latestRoundData()` reverts with access denied.
+3. `_usdToEth()` reverts.
+4. `_baseCost()` reverts.
+5. `support()` reverts for all users.
+6. `estimate()` also reverts, so the frontend cannot even show prices.
+
+**Recommendation**: Wrap the Chainlink call in try/catch and maintain a cached last-known-good price:
 ```solidity
-AggregatorV3Interface internal immutable sequencerUptimeFeed;
-uint256 private constant GRACE_PERIOD = 3600; // 1 hour
+uint256 private _cachedPrice;
+uint256 private _cachedAt;
 
-function _usdToEth(uint256 usdAmount) internal view override returns (uint256) {
-    // Check sequencer status
-    (, int256 answer, uint256 startedAt,,) = sequencerUptimeFeed.latestRoundData();
-    bool isSequencerUp = answer == 0;
-    if (!isSequencerUp) revert SequencerDown();
-    if (block.timestamp - startedAt < GRACE_PERIOD) revert GracePeriodNotOver();
-
-    return super._usdToEth(usdAmount);
-}
-```
-
----
-
-## [O-6] Single oracle dependency with no fallback
-**Severity**: Low
-**Category**: evm-audit-oracles
-**Location**: `_usdToEth()` in `HasPriceFeed.sol:35-42`, `_baseCost()` in `Support.sol:366-369`
-**Description**: The entire payment system relies on a single Chainlink price feed with no fallback oracle. If the Chainlink feed is deprecated, the multisig blocks access, or it returns invalid data that causes a revert, all subscription operations (`support()`, `cost()`, `estimate()`) become permanently bricked. The `setPriceFeed()` function allows the owner to update the feed address, but if the Chainlink multisig suddenly blocks access to the current feed, users cannot subscribe until the owner executes a governance action to update the feed. The `grant()` function (owner-only free subscriptions) is not affected since it bypasses pricing.
-**Proof of Concept**:
-1. Chainlink deprecates the current ETH/USD feed or the multisig blocks access.
-2. `latestRoundData()` reverts.
-3. All calls to `support()`, `cost()`, and `estimate()` revert.
-4. Users cannot create or extend subscriptions until the owner calls `setPriceFeed()` with a new feed address.
-**Recommendation**: Consider wrapping the `latestRoundData()` call in a try/catch with a fallback mechanism:
-```solidity
 function _usdToEth(uint256 usdAmount) internal view virtual returns (uint256) {
     try priceFeed.latestRoundData() returns (
-        uint80 roundId, int256 price, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound
+        uint80 roundId, int256 price, uint256, uint256 updatedAt, uint80 answeredInRound
     ) {
         if (price <= 0) revert StalePrice();
         if (answeredInRound < roundId) revert StalePrice();
         if (block.timestamp - updatedAt > _maxStaleness()) revert StalePrice();
+        _cachedPrice = uint256(price);
+        _cachedAt = block.timestamp;
         return usdAmount * 1e18 / uint256(price);
     } catch {
-        // Fallback to secondary oracle or revert with descriptive error
-        revert OracleUnavailable();
+        // Fall back to cached price if recent enough
+        if (_cachedPrice > 0 && block.timestamp - _cachedAt <= _maxStaleness() * 2) {
+            return usdAmount * 1e18 / _cachedPrice;
+        }
+        revert StalePrice();
     }
 }
 ```
-The severity is Low because the owner can recover by calling `setPriceFeed()`, and the impact is limited to a temporary DoS of paid subscriptions (grants still work).
+
+Alternatively, for a simpler approach given this is a subscription protocol (not a lending protocol), accept the DoS risk and rely on `setPriceFeed()` for recovery. Document this as a known limitation.
 
 ---
 
-## [O-7] Unhandled `latestRoundData()` revert causes complete DoS of paid subscriptions
-**Severity**: Low
-**Category**: evm-audit-oracles
-**Location**: `_usdToEth()` in `HasPriceFeed.sol:36-37`, `_baseCost()` in `Support.sol:366-369`
-**Description**: The call to `priceFeed.latestRoundData()` is not wrapped in a try/catch. If the Chainlink feed reverts for any reason (deprecated feed, access control changes, feed migration), the raw revert propagates up through `_baseCost()` -> `support()`, causing a complete denial of service for all paid subscription operations. Chainlink multisigs have the ability to block access to price feeds at any time. While this is related to O-6 (single oracle dependency), the specific risk here is that an unhandled revert from an external call bricks the core user-facing function with no graceful degradation.
-**Proof of Concept**:
-1. Chainlink feed at the stored address begins reverting (access revoked, contract self-destructed, or proxy upgraded to incompatible interface).
-2. Every call to `support()` with a non-zero tier price reverts.
-3. The `cost()` and `estimate()` view functions also become unusable.
-4. Only `grant()` (which does not call `_usdToEth`) continues to work.
-**Recommendation**: Wrap the external call in try/catch as shown in O-6. Additionally, consider a circuit breaker pattern where the owner can set a manual ETH price as a fallback when the oracle is unavailable.
+## Summary
 
----
+| ID | Title | Severity |
+|----|-------|----------|
+| O-1 | Missing `startedAt == 0` validation on Chainlink round data | Low |
+| O-2 | No Chainlink `minAnswer`/`maxAnswer` circuit breaker check | Medium |
+| O-3 | No L2 sequencer uptime check for potential L2 deployment | Low |
+| O-4 | Hardcoded 8-decimal assumption for price feed | Low |
+| O-5 | Single oracle dependency with no fallback | Low |
+| O-6 | Hardcoded 1-hour staleness threshold may be too strict/lenient per chain | Low |
+| O-7 | Unhandled Chainlink revert causes complete subscription DoS | Medium |
 
-## [O-8] Price feed address is owner-changeable but lacks validation of feed correctness
-**Severity**: Info
-**Category**: evm-audit-oracles
-**Location**: `setPriceFeed()` in `HasPriceFeed.sol:27-31`
-**Description**: The `setPriceFeed()` function allows the owner to update the price feed address to any non-zero address. There is no validation that the new address actually implements `AggregatorV3Interface`, returns a reasonable price, uses the expected decimal precision, or is an ETH/USD feed (vs. BTC/USD or another denomination). A misconfigured feed would silently produce incorrect pricing. The mitigation is that the contract uses `Ownable2Step`, requiring the new owner to explicitly accept, reducing accidental ownership-related misconfiguration. However, the feed address change itself is a single-step operation.
-**Proof of Concept**:
-1. Owner accidentally calls `setPriceFeed()` with a BTC/USD feed address.
-2. BTC/USD returns ~$60,000 in 8 decimals instead of ETH ~$2,000.
-3. All subscriptions are now priced as if 1 ETH = $60,000, making them ~30x cheaper in ETH terms.
-4. The project receives 30x less ETH value than intended.
-**Recommendation**: Add a sanity check when setting the feed:
-```solidity
-function setPriceFeed(address _priceFeed) public virtual onlyOwner {
-    if (_priceFeed == address(0)) revert InvalidPriceFeed();
-    AggregatorV3Interface newFeed = AggregatorV3Interface(_priceFeed);
-    // Sanity check: feed must return valid data
-    (, int256 price,,,) = newFeed.latestRoundData();
-    if (price <= 0) revert InvalidPriceFeed();
-    priceFeed = newFeed;
-    emit PriceFeedUpdated(_priceFeed);
-}
-```
+### Overall Assessment
+
+The `HasPriceFeed` dependency implements the most critical Chainlink safety checks: `price <= 0`, `answeredInRound < roundId`, and timestamp-based staleness. The `setPriceFeed()` function provides an owner escape hatch for deprecated feeds. The protocol is a subscription system (not a lending/DEX protocol), so the impact of oracle issues is generally limited to incorrect pricing rather than direct fund theft.
+
+The two Medium findings (O-2 and O-7) represent scenarios where the protocol could either misprice subscriptions during extreme market events or become completely unavailable due to Chainlink feed issues. Neither leads to direct loss of user funds, but both degrade the protocol's reliability and could cause economic loss for the owner.
+
+The Low findings are best-practice improvements that strengthen the oracle integration's robustness, particularly for future multi-chain deployment.

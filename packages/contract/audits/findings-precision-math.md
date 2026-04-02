@@ -1,195 +1,351 @@
 # Precision & Math Audit Findings
 
-Audited contracts:
-- `packages/contract/contracts/Support.sol`
-- `packages/contract/contracts/SupportToken.sol`
-- `packages/contract/contracts/extensions/WithSupportTokens.sol`
-- `packages/contract/contracts/hooks/MaxSlotsHook.sol`
-- `packages/contract/contracts/hooks/DiscountHook.sol`
-- `packages/contract/contracts/interfaces/ISubscriptionHook.sol`
-- `packages/contract/contracts/interfaces/ISupportRenderer.sol`
-- `packages/contract/contracts/renderers/SupportRenderer.sol`
-- `node_modules/@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol` (dependency)
-
-Checklist: `evm-audit-precision-math`
+**Auditor**: Claude Opus 4.6 (1M context)
+**Date**: 2026-04-02
+**Scope**: All contracts in `packages/contract/contracts/` (excluding mocks)
+**Checklist**: `evm-audit-precision-math`
 
 ---
 
-## [PM-1] Tier upgrade pro-rata calculation rounds in favor of user, not protocol
-**Severity**: Low
+## [PM-1] Division before multiplication in `_changeTier()` time-remaining conversion
+
+**Severity**: Medium
 **Category**: evm-audit-precision-math
-**Location**: `_changeTier()` in `Support.sol:289`
-**Description**: When upgrading tiers, the pro-rated cost difference is calculated as:
-```solidity
-uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-```
-Solidity integer division truncates (rounds down), meaning the user pays slightly less than the exact pro-rated difference. The rounding should favor the protocol (round up), not the user. On each tier upgrade, up to `30 days - 1` seconds (2,591,999 wei-seconds) of price difference is lost to truncation.
+**Location**: `_changeTier()` in `Support.sol:286`
 
-For example, with a $15/month price difference and 15 days remaining:
-- Exact: `1500000000 * 1296000 / 2592000 = 750000000` (no loss here)
-- But with 15 days + 1 second remaining: `1500000000 * 1296001 / 2592000 = 750000000` (truncated, 1500000000 * 1 / 2592000 = 0 lost)
+**Description**: When a subscriber changes tiers, the remaining time on the old tier is converted to equivalent time on the new tier using:
 
-The loss is small per transaction but compounds across many upgrades.
-
-**Proof of Concept**: A user with 1 second of remaining time on tier 0 ($5/mo) upgrades to tier 3 ($50/mo). `diffUSD = (5000000000 - 500000000) * 1 / 2592000 = 4500000000 / 2592000 = 1736` (8-decimal USD). The exact value should be `1736.11...`, so 0.11 units of 8-decimal USD is lost (~$0.0000011). Repeated across thousands of tier changes, this becomes meaningful.
-
-**Recommendation**: Round up the division to favor the protocol:
-```solidity
-uint256 diffUSD = (uint256(newPrice - oldPrice) * remaining + 30 days - 1) / 30 days;
-```
-
----
-
-## [PM-2] Tier downgrade time conversion rounds in favor of user
-**Severity**: Low
-**Category**: evm-audit-precision-math
-**Location**: `_changeTier()` in `Support.sol:299`
-**Description**: When downgrading to a cheaper tier, the remaining time is converted using:
 ```solidity
 uint256 converted = uint256(remaining) * oldPrice / newPrice;
 ```
-This division rounds down, meaning the user receives slightly less converted time than they are owed. While this favors the protocol (acceptable), the combination of PM-1 favoring the user on upgrades and PM-2 favoring the protocol on downgrades creates an inconsistent rounding policy. A consistent rounding direction should be chosen.
 
-**Proof of Concept**: User has 30 days (2592000 seconds) remaining on tier 2 ($25/mo) and downgrades to tier 1 ($10/mo). `converted = 2592000 * 2500000000 / 1000000000 = 6480000` seconds (75 days). No precision loss here. But with 2592001 seconds remaining: `2592001 * 2500000000 / 1000000000 = 6480002` (truncated from 6480002.5). The user loses 0.5 seconds.
+This is a single division that truncates. The truncation is proportional to `newPrice` and can cause meaningful loss of subscriber time. For example, if `remaining = 59 days`, `oldPrice = 5e8` (5 USD), and `newPrice = 10e8` (10 USD), the exact result is 29.5 days but the division truncates to 29 days, costing the subscriber 0.5 days. While a single division is not itself a division-before-multiplication bug, this truncated `converted` value is then **added** to other terms to form `rawExpiry`:
 
-**Recommendation**: Document the intended rounding direction for all division operations. If the protocol should always be favored, round down converted time on downgrades (current behavior) and round up cost on upgrades (fix PM-1).
-
----
-
-## [PM-3] Discount calculation rounds down, allowing zero-cost subscriptions for very small amounts
-**Severity**: Low
-**Category**: evm-audit-precision-math
-**Location**: `beforeSubscribe()` in `DiscountHook.sol:30`
-**Description**: The discount formula is:
 ```solidity
-adj.adjustedUSD = baseUSD * (100 - percentOff) / 100;
+uint256 rawExpiry = uint256(block.timestamp) + converted + uint256(adj.adjustedDuration) * 30 days;
 ```
-When `baseUSD * (100 - percentOff) < 100`, the result rounds to zero. This can happen if the tier price is extremely low (e.g., 1 in 8-decimal USD = $0.00000001/mo) and the discount is high (e.g., 99%). With `baseUSD = 1` and `percentOff = 99`: `1 * 1 / 100 = 0`. The user gets a free subscription.
 
-Additionally, `percentOff = 100` is allowed by the setter validation (`_percentOff > 100` reverts), which always results in `adjustedUSD = 0`, making all qualifying subscriptions completely free.
+The precision loss from the division of `remaining * oldPrice / newPrice` always rounds **against** the subscriber. With 8-decimal USD tier prices (Chainlink convention), a remainder of up to `newPrice - 1` ticks (~10 USD worth of seconds) is lost. For cheap tiers (e.g., 1 USD/month) this is negligible; for expensive tiers (e.g., 100 USD/month) the truncation cost rises.
 
 **Proof of Concept**:
-1. Owner sets `percentOff = 100`, `minMonths = 1`.
-2. Any user calls `support()` with `duration >= 1`.
-3. `adjustedUSD = baseUSD * 0 / 100 = 0`.
-4. `_baseCost(0)` returns 0. Subscription is free.
+1. Subscriber has `remaining = 1 second` on a tier priced at `1e8` (1 USD).
+2. They upgrade to a tier priced at `3e8` (3 USD).
+3. `converted = 1 * 1e8 / 3e8 = 0` -- the subscriber loses their entire remaining 1 second.
+4. More realistically: `remaining = 86399` (just under 1 day), `oldPrice = 5e8`, `newPrice = 12e8`: `converted = 86399 * 5e8 / 12e8 = 35999` (0.41 days), losing about 0.007 days. Losses compound with larger price ratios.
 
-**Recommendation**: If 100% discounts are not intended, change the validation to `>=`:
+**Recommendation**: This is an inherent property of integer division and the loss magnitude is small for realistic tier prices. To mitigate, consider rounding up in favor of the subscriber for the time conversion:
+
 ```solidity
-if (_percentOff >= 100) revert InvalidDiscount();
+uint256 converted = (uint256(remaining) * oldPrice + newPrice - 1) / newPrice;
 ```
-For the rounding-to-zero case, consider adding a minimum cost check or reverting if the adjusted price rounds to zero when it should not:
-```solidity
-if (adj.adjustedUSD == 0 && baseUSD > 0 && percentOff < 100) {
-    adj.adjustedUSD = 1; // minimum 1 unit
-}
-```
+
+Alternatively, document that tier changes truncate fractional time against the subscriber as intended behavior.
 
 ---
 
-## [PM-4] Oracle decimal precision is hardcoded to 8 decimals
-**Severity**: Medium
+## [PM-2] USD-to-ETH conversion assumes 8-decimal Chainlink feed without verification
+
+**Severity**: Low
 **Category**: evm-audit-precision-math
-**Location**: `_usdToEth()` in `HasPriceFeed.sol:41` and `_beforeSubscribe()` in `Support.sol:359`
-**Description**: The USD-to-ETH conversion in `HasPriceFeed._usdToEth()` assumes the Chainlink price feed returns 8-decimal precision:
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:41`, consumed by `_baseCost()` in `Support.sol:348`
+
+**Description**: The `_usdToEth` function computes:
+
 ```solidity
 return usdAmount * 1e18 / uint256(price);
 ```
-The `tierPrices` are stored as 8-decimal USD values (e.g., `500000000` = $5.00), and the formula `usdAmount * 1e18 / price` is only correct when `price` is also in 8 decimals. If the price feed is changed (via `setPriceFeed()`) to one with a different number of decimals (e.g., 18 decimals for some L2 feeds, or 6 decimals), the conversion will be off by orders of magnitude. There is no call to `feed.decimals()` to normalize.
+
+This assumes the Chainlink price feed returns prices with 8 decimals (the standard for ETH/USD). The function never calls `priceFeed.decimals()` to verify. If the owner sets a price feed with a different decimal precision (e.g., 18 decimals for a custom feed, or 6 decimals for some other oracle), the conversion will be wrong by orders of magnitude.
+
+The `tierPrices` are `uint128` values that the comment says use "the same decimal precision as the price feed (8 decimals for Chainlink ETH/USD)." If tier prices are set assuming 8 decimals (e.g., `5e8` for $5) but the feed returns 18-decimal prices, `usdAmount * 1e18 / price` would produce a value ~1e10x too small, making subscriptions essentially free. Conversely, a 6-decimal feed would make subscriptions ~100x too expensive.
 
 **Proof of Concept**:
-1. Owner deploys with a standard 8-decimal Chainlink ETH/USD feed. Works correctly.
-2. Owner calls `setPriceFeed()` with a feed that returns 18 decimals (e.g., some custom or L2 feed).
-3. For a $5 tier: `usdAmount = 500000000`, `price = 2000e18 = 2000000000000000000000`.
-4. Result: `500000000 * 1e18 / 2000000000000000000000 = 250000000000000` (0.00025 ETH instead of the correct 0.0025 ETH).
-5. Users pay 10x less than intended.
+1. Owner deploys with a custom price feed that returns 18-decimal prices (e.g., `3000e18` for $3000 ETH).
+2. Tier price is `5e8` (intended as $5 at 8-decimal precision).
+3. `_usdToEth(5e8) = 5e8 * 1e18 / 3000e18 = 5e8 / 3000 = 166666` wei (~0.000000000000166 ETH).
+4. Subscription costs virtually nothing.
 
-**Recommendation**: Query the feed's decimals and normalize:
+**Recommendation**: Either hardcode the assumption with a deploy-time check:
+
 ```solidity
-function _usdToEth(uint256 usdAmount) internal view virtual returns (uint256) {
-    (, int256 price, , uint256 updatedAt, ) = priceFeed.latestRoundData();
-    // ... staleness checks ...
-    uint8 feedDecimals = priceFeed.decimals();
-    return usdAmount * 1e18 / (uint256(price) * 10**(18 - feedDecimals));
-}
+require(priceFeed.decimals() == 8, "Feed must be 8 decimals");
 ```
-Or, if the system is intended to only work with 8-decimal feeds, add a constructor check:
+
+Or normalize dynamically:
+
 ```solidity
-require(priceFeed.decimals() == 8, "Only 8-decimal feeds supported");
+uint8 dec = priceFeed.decimals();
+return usdAmount * 1e18 / (uint256(price) * 10**(18 - dec));
 ```
 
 ---
 
-## [PM-5] Division before multiplication in tier-change cost calculation
-**Severity**: Medium
-**Category**: evm-audit-precision-math
-**Location**: `_changeTier()` in `Support.sol:289-291`
-**Description**: In the tier upgrade path, the pro-rated USD difference is computed first via a division, then combined with `adj.adjustedUSD` before converting to ETH:
-```solidity
-uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-required = _usdToEth(diffUSD + adj.adjustedUSD);
-```
-The division by `30 days` truncates `diffUSD` before it is passed to `_usdToEth()`, which then multiplies by `1e18` and divides by `price`. If the division were deferred, precision would be preserved. This is a division-before-multiplication pattern because `_usdToEth` internally performs `usdAmount * 1e18 / price`, and the already-truncated `diffUSD` is the input.
+## [PM-3] Discount calculation rounds against protocol, allowing 100% discount to zero out cost
 
-Concretely, the calculation is effectively:
-```
-((priceDiff * remaining) / 2592000 + adjustedUSD) * 1e18 / ethPrice
-```
-The intermediate `priceDiff * remaining / 2592000` loses precision that cannot be recovered by the subsequent multiplication by `1e18`.
-
-**Proof of Concept**: Consider `newPrice - oldPrice = 100000000` (8-dec, $1/mo difference), `remaining = 100` seconds.
-- Current: `diffUSD = 100000000 * 100 / 2592000 = 3858` (truncated from 3858.02...)
-- Then `_usdToEth(3858) = 3858 * 1e18 / 200000000000 = 19290000000000` (0.00001929 ETH)
-- If we kept full precision: `100000000 * 100 * 1e18 / (2592000 * 200000000000) = 19290123456790` (0.00001929012... ETH)
-- Loss: ~123 wei per conversion
-
-While each individual loss is tiny, this represents a structural precision leak.
-
-**Recommendation**: Where possible, defer the division. For the ETH conversion, consider a specialized function that avoids intermediate truncation:
-```solidity
-uint256 numerator = uint256(newPrice - oldPrice) * remaining;
-required = numerator * 1e18 / (uint256(30 days) * uint256(price)) + _baseCost(adj.adjustedUSD);
-```
-This keeps the full precision of the intermediate product before dividing.
-
----
-
-## [PM-6] Tier change with very small remaining time rounds pro-rated cost to zero
 **Severity**: Low
 **Category**: evm-audit-precision-math
-**Location**: `_changeTier()` in `Support.sol:289`
-**Description**: When `uint256(newPrice - oldPrice) * remaining < 30 days` (2,592,000), the `diffUSD` rounds to zero. This means a user can upgrade their tier for free (paying only the `adj.adjustedUSD` from the hook, which may also be zero if `adjustedDuration` is 0). For a tier change with `duration = 0` (which is allowed: `if (duration == 0 && (isNew || tier == previousTier)) revert InvalidDuration()` only blocks same-tier or new subscriptions), the user gets a free tier upgrade.
+**Location**: `_applyDiscount()` in `DiscountHook.sol:34`
+
+**Description**: The discount formula is:
+
+```solidity
+adj.adjustedUSD = baseUSD * (100 - percentOff) / 100;
+```
+
+When `percentOff == 100`, this evaluates to `baseUSD * 0 / 100 = 0`, making the subscription free. The constructor allows `_percentOff == 100` (`if (_percentOff > 100) revert`), so the owner can configure a 100% discount that eliminates all payment requirements.
+
+Additionally, this division rounds **down** (toward zero), meaning the protocol always receives slightly less than the exact discounted amount. For example, `baseUSD = 999` and `percentOff = 10` gives `999 * 90 / 100 = 899` instead of the exact 899.1. The rounding direction favors subscribers over the protocol on every transaction. Over many transactions this leaks small amounts of value.
 
 **Proof of Concept**:
-1. User subscribes to tier 0 ($5/mo) for 1 month.
-2. After 29 days 23 hours 59 minutes 59 seconds (1 second remaining), user calls `support(recipient, 3, 0)` to change to tier 3 ($50/mo).
-3. `remaining = 1`, `diffUSD = (5000000000 - 500000000) * 1 / 2592000 = 4500000000 / 2592000 = 1736` -- this is non-zero in this example. For it to be zero: `(newPrice - oldPrice) * remaining < 2592000`. With prices in 8-dec USD, even small differences (e.g., adjacent tiers with $5 difference = 500000000) make it hard to reach zero unless `remaining < 6` seconds.
-4. With `remaining < 6` seconds and a $5 price difference: `500000000 * 5 / 2592000 = 964` (still non-zero). With `remaining = 0`: impossible since the token would be expired.
+1. Owner calls `setDiscount(1, 100)` -- 100% off for subscriptions >= 1 month.
+2. Any subscriber calls `support()` with `msg.value = 0` and gets a full subscription for free.
+3. For the rounding case: with tier price `3333333` (8 decimals) and 20% off for 1 month: `3333333 * 80 / 100 = 2666666` instead of exact `2666666.4`. Protocol loses 0.4 units (~$0.000000004).
 
-On further analysis, because tier prices are in 8-decimal USD (hundreds of millions), the numerator is always much larger than 2,592,000 for any `remaining >= 1`. The rounding-to-zero risk is negligible for realistic tier prices but could apply if tier prices are set extremely low (e.g., `tierPrices[0] = 1`, meaning $0.00000001/mo).
-
-**Recommendation**: Add a check after computing `diffUSD`:
-```solidity
-if (diffUSD == 0 && newPrice > oldPrice) diffUSD = 1;
-```
-This ensures at least a minimal charge for upgrades, preventing free tier changes even with edge-case pricing.
+**Recommendation**: If 100% discounts are not intended, change the guard to `if (_percentOff >= 100) revert InvalidDiscount()`. For the rounding direction, consider rounding up: `(baseUSD * (100 - percentOff) + 99) / 100`. The practical impact of the rounding is negligible given USD-level tier prices.
 
 ---
 
-## [PM-7] 30-day month approximation causes drift from calendar months
+## [PM-4] `_changeTier()` minimum-expiry top-up has division before multiplication
+
+**Severity**: Low
+**Category**: evm-audit-precision-math
+**Location**: `_changeTier()` in `Support.sol:293`
+
+**Description**: When upgrading to a more expensive tier, if the converted remaining time is less than 30 days, the contract charges extra to reach the 30-day minimum:
+
+```solidity
+required += _baseCost(uint256(newPrice) * (minExpiry - rawExpiry) / 30 days);
+```
+
+This expression first computes `uint256(newPrice) * (minExpiry - rawExpiry)` then divides by `30 days`. This is correct ordering (multiply before divide). However, the division by `30 days` (2592000 seconds) truncates. The truncated value is then passed to `_baseCost()` which calls `_usdToEth()` which does another division: `usdAmount * 1e18 / uint256(price)`.
+
+This creates a chain of two sequential divisions, each losing precision. The first division can lose up to `30 days - 1` ticks of `newPrice` (equivalent to a few cents of USD). The second division (in `_usdToEth`) can lose up to `price - 1` ticks (negligible at 8-decimal ETH prices worth ~$3000).
+
+**Proof of Concept**:
+1. `newPrice = 10e8`, `minExpiry - rawExpiry = 2591999` (just under 30 days, i.e., 29.999... days).
+2. `uint256(10e8) * 2591999 / 2592000 = 9999996` (loses ~4 out of 10e8).
+3. This then goes through `_usdToEth(9999996)` where the final division truncates again.
+4. Net effect: protocol receives about $0.00000004 less than exact proportional charge. This is negligible.
+
+**Recommendation**: The precision loss here is extremely small in practice. No fix is strictly necessary. For maximum precision, the two divisions could be combined:
+
+```solidity
+required += uint256(newPrice) * (minExpiry - rawExpiry) * 1e18 / (30 days * uint256(price));
+```
+
+But this changes the interface (bypassing `_baseCost`) and the savings are sub-cent.
+
+---
+
+## [PM-5] `addTier()` downcast of `tierPrices.length` to `uint8` can silently overflow
+
+**Severity**: Low
+**Category**: evm-audit-precision-math
+**Location**: `addTier()` in `Support.sol:229`
+
+**Description**: After pushing a new tier price, the code emits:
+
+```solidity
+emit TierPriceUpdated(uint8(tierPrices.length - 1), priceUSD);
+```
+
+If the owner manages to add more than 256 tiers, `uint8(tierPrices.length - 1)` will silently truncate, emitting an incorrect tier index in the event. The `tier` parameter throughout the system is typed as `uint8`, meaning the contract logically supports at most 256 tiers. However, `tierPrices` is a `uint128[]` which can hold more than 256 entries. If `tierPrices.length > 256`, the `tier >= tierPrices.length` guards in `support()` and `grant()` would still pass for `tier` values 0-255, but tiers 256+ would be unreachable since `uint8` cannot represent them.
+
+**Proof of Concept**:
+1. Owner calls `addTier()` 257 times.
+2. The 257th call pushes index 256. `uint8(256) == 0`, so the event `TierPriceUpdated(0, ...)` is emitted, falsely suggesting tier 0's price was updated.
+3. Tier index 256 exists in the array but is unreachable through any function that takes `uint8 tier`.
+
+**Recommendation**: Add a guard in `addTier()`:
+
+```solidity
+if (tierPrices.length >= type(uint8).max) revert InvalidTier();
+```
+
+This caps the array at 255 tiers (indices 0-254), which is more than sufficient. Alternatively, use `SafeCast.toUint8()`.
+
+---
+
+## [PM-6] `_beforeSubscribe` baseUSD multiplication can overflow for extreme inputs
+
 **Severity**: Info
 **Category**: evm-audit-precision-math
-**Location**: `_addDuration()` in `Support.sol:337` and `_changeTier()` in `Support.sol:289,300`
-**Description**: Duration is computed as `duration * 30 days` (2,592,000 seconds), which approximates every month as exactly 30 days. Real calendar months vary from 28 to 31 days. Over a 12-month subscription, the total is 360 days instead of 365 (or 366), meaning the user gets ~5 fewer days than a calendar year. This is a well-known simplification in smart contract time calculations but should be documented so users understand what they are paying for.
+**Location**: `_beforeSubscribe()` in `Support.sol:341`
 
-The same constant appears in the pro-rata calculation in `_changeTier()`:
-```solidity
-uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-```
-This is consistent (same 30-day month assumption for both duration and pricing), so there is no internal inconsistency.
+**Description**: The base USD cost is computed as:
 
-**Recommendation**: Document this behavior clearly in user-facing documentation and NatSpec comments:
 ```solidity
-/// @dev Duration is measured in "months" of exactly 30 days (2,592,000 seconds).
-///      A 12-month subscription lasts 360 days, not 365.
+uint256 baseUSD = uint256(tierPrices[tier]) * duration;
 ```
+
+`tierPrices[tier]` is `uint128` (max ~3.4e38) and `duration` is `uint32` (max ~4.29e9). The product can reach ~1.46e48, which is well within `uint256` range (max ~1.15e77). There is no overflow risk here.
+
+However, it is worth noting that a `uint128` tier price of `type(uint128).max` would represent an absurdly large USD amount (~$3.4e30 at 8 decimals), far beyond any realistic use. The owner controls tier prices, so this is not exploitable by third parties.
+
+**Proof of Concept**: Not exploitable. `uint128.max * uint32.max = ~1.46e48 < uint256.max`. No overflow occurs.
+
+**Recommendation**: No action required. The math is safe within the constraints of the types used.
+
+---
+
+## [PM-7] `_usdToEth` can return zero for small USD amounts, enabling free subscriptions via rounding
+
+**Severity**: Medium
+**Category**: evm-audit-precision-math
+**Location**: `_usdToEth()` in `HasPriceFeed.sol:41`, called from `_baseCost()` in `Support.sol:348`
+
+**Description**: The USD-to-ETH conversion computes:
+
+```solidity
+return usdAmount * 1e18 / uint256(price);
+```
+
+If `usdAmount * 1e18 < price`, this expression returns 0. With an ETH price of $3000 (Chainlink returns `3000e8 = 3e11`), any `usdAmount` where `usdAmount * 1e18 < 3e11` rounds to zero. That means `usdAmount < 3e11 / 1e18 = 0.0000003`, i.e., `usdAmount < 1` in 8-decimal terms.
+
+In practice, tier prices are set in 8-decimal format (e.g., `5e8` for $5), so the smallest realistic `usdAmount` passed to `_usdToEth` after discount would be `1` (representing $0.00000001). For this edge case: `1 * 1e18 / 3e11 = 3333333` wei (~$0.00000001), which is non-zero. So for Chainlink ETH/USD feeds with 8-decimal prices, this returns 0 only for `usdAmount == 0`, which is already handled by `_baseCost`:
+
+```solidity
+if (adjustedUSD == 0) return 0;
+```
+
+However, the risk becomes relevant if a hook returns a very small but non-zero `adjustedUSD`. The `_baseCost` check passes (non-zero), but `_usdToEth` could return 0 if the price feed uses higher precision or the ETH price is extremely high. In that scenario, the subscriber pays 0 ETH for a non-free subscription.
+
+**Proof of Concept**:
+1. Hypothetical: ETH at $1,000,000 (price feed returns `1e14`).
+2. Hook returns `adjustedUSD = 1` (smallest non-zero).
+3. `_usdToEth(1) = 1 * 1e18 / 1e14 = 10000` wei = 0.00000000000001 ETH. This is non-zero but essentially free (~$0.00000001).
+4. The real concern is with non-standard feeds: if `price = 1e20`, then `usdAmount * 1e18` must exceed `1e20` to be non-zero, meaning `usdAmount > 100`.
+
+**Recommendation**: Add a minimum ETH cost check after `_usdToEth`:
+
+```solidity
+function _baseCost(uint256 adjustedUSD) internal view returns (uint256) {
+    if (adjustedUSD == 0) return 0;
+    uint256 cost = _usdToEth(adjustedUSD);
+    require(cost > 0, "Cost rounds to zero");
+    return cost;
+}
+```
+
+Or, as a simpler approach, ensure all tier prices are large enough (e.g., at least `1e6` in 8-decimal terms = $0.01) that rounding to zero is impossible at any realistic ETH price.
+
+---
+
+## [PM-8] Renderer division by `1 days` can produce zero for sub-day subscription periods
+
+**Severity**: Info
+**Category**: evm-audit-precision-math
+**Location**: `_buildSVG()` in `SupportRenderer.sol:56-57`, `_attributes()` in `SupportRenderer.sol:123`
+
+**Description**: The SVG renderer computes durations using integer division by `1 days`:
+
+```solidity
+uint256 dur = data.active
+    ? (block.timestamp - data.startedAt) / 1 days
+    : (data.expiresAt - data.startedAt) / 1 days;
+```
+
+And in `_attributes()`:
+
+```solidity
+Strings.toString((segEnd - data.tierPeriods[i].startedAt) / 1 days)
+```
+
+If a subscription has been active for less than 24 hours, `dur` will be 0, and the SVG will display "0D". Similarly, tier periods shorter than 1 day display "0d". This is a cosmetic issue only -- it does not affect accounting or payments. The `dayNum` calculation on line 54 adds 1 to avoid showing "DAY 0":
+
+```solidity
+uint256 dayNum = (block.timestamp - data.startedAt) / 1 days + 1;
+```
+
+This means on the first day it shows "DAY 1", which is correct.
+
+**Proof of Concept**: Subscribe, then view `tokenURI` within 24 hours. Duration shows "0D" in the SVG. No financial impact.
+
+**Recommendation**: No action needed. This is purely cosmetic. If desired, display "< 1D" or use hours for short durations.
+
+---
+
+## [PM-9] No `unchecked` blocks with user-influenced values
+
+**Severity**: Info
+**Category**: evm-audit-precision-math
+**Location**: All contracts
+
+**Description**: The codebase does not use any `unchecked` blocks. All arithmetic is protected by Solidity 0.8.28's built-in overflow/underflow checks. This is good practice and eliminates an entire class of precision/overflow bugs.
+
+**Proof of Concept**: N/A -- no issue found.
+
+**Recommendation**: No action required.
+
+---
+
+## [PM-10] Timestamp subtraction in `_changeTier()` is safe but undocumented
+
+**Severity**: Info
+**Category**: evm-audit-precision-math
+**Location**: `_changeTier()` in `Support.sol:280`
+
+**Description**: The expression:
+
+```solidity
+uint64 remaining = currentExpiry - uint64(block.timestamp);
+```
+
+This subtraction is safe because `_changeTier()` is only called when the subscription is active (`active == true`), which means `currentExpiry > block.timestamp`. The `uint64(block.timestamp)` downcast is safe until the year 584,942,417,355 (when `block.timestamp` exceeds `type(uint64).max`).
+
+However, `currentExpiry` is already `uint64`, and the subtraction produces a `uint64`. If `block.timestamp` were somehow larger than `currentExpiry` (which the active check prevents), this would revert due to Solidity 0.8 underflow protection. The code is correct.
+
+**Proof of Concept**: N/A -- the active-subscription guard prevents underflow.
+
+**Recommendation**: No action required. Optionally add a comment noting the active-subscription precondition.
+
+---
+
+## [PM-11] Duration uses 30-day months -- not a bug, but may surprise users
+
+**Severity**: Info
+**Category**: evm-audit-precision-math
+**Location**: `_addDuration()` in `Support.sol:325`, `_changeTier()` in `Support.sol:287`
+
+**Description**: All duration calculations use `30 days` (2,592,000 seconds) as the month length:
+
+```solidity
+uint256 result = uint256(base) + uint256(duration) * 30 days;
+```
+
+This means a "12-month" subscription is 360 days, not 365. A subscriber paying for 12 months gets 5 fewer days than a calendar year. This is a common and reasonable simplification for on-chain subscription systems, but it should be documented clearly in user-facing materials.
+
+**Proof of Concept**: Subscribe for 12 months. Subscription expires after 360 days, not 365.
+
+**Recommendation**: Document in user-facing materials that 1 month = 30 days for all calculations. No code change needed.
+
+---
+
+# Checklist Items Reviewed with No Findings
+
+The following checklist items were reviewed and found not applicable or not present in the codebase:
+
+| Checklist Item | Result |
+|---|---|
+| Hidden division-before-multiplication in library calls | No chained `wmul`/`wdiv` patterns. The codebase uses plain arithmetic. |
+| Extra divisions by scaling factor | No double-division by the same constant found. |
+| Protocol-favoring rounding rule (ERC-4626 vaults) | Not applicable -- this is not a vault/share system. |
+| Inconsistent rounding across functions | Not applicable -- no deposit/withdrawal share math. |
+| Inverse fee calculation error | Not applicable -- no fee-adjusted share conversions. |
+| Overflow in `unchecked` blocks | No `unchecked` blocks in the codebase. |
+| Negative-to-unsigned cast | No signed-to-unsigned casts found. |
+| Signed-unsigned addition/subtraction | No mixed signed/unsigned arithmetic found (price feed `int256` is checked `> 0` before cast). |
+| Overflow in time-based calculations | `_addDuration` uses `uint256` intermediates and caps at `uint64.max`. Safe. |
+| Token decimal mismatch in price calculations | Only one token type (ETH). No cross-token decimal issues. |
+| Decimal scaling for vault with non-18 decimal assets | Not applicable -- no vault. |
+| Compounding when claiming simple interest | Not applicable -- no interest/yield system. |
+| Reward per token precision loss | Not applicable -- no staking rewards. |
+| Missing state update before reward claim | Not applicable -- no reward mechanism. |
+| Fee shares minted after reward distribution | Not applicable -- no share/fee mechanism. |
+| Division by zero in assembly | No inline assembly used. |
+| `type(uint256).max` as sentinel value | Not used in arithmetic. `type(uint8).max` is used as `NO_TIER` sentinel but only in comparisons. |
+| Extreme weight ratios cause overflow | Not applicable -- no weighted pool math. |
+| Solidity time literals are uint24 | Time literals are only used in expressions with `uint256` operands (e.g., `uint256(duration) * 30 days`), so the result is `uint256`. Safe. |
+| Excessive precision scaling -- double-scaling | Not applicable -- single scaling path through `_usdToEth`. |
+| Mismatched precision scaling -- decimals vs hardcoded | See PM-2 (oracle decimal assumption). |
+| Downcast overflow silently invalidates pre-downcast invariant checks | See PM-5 (`addTier` uint8 cast). The `uint64(block.timestamp)` cast in PM-10 is safe for centuries. |

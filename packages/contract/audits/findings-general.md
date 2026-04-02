@@ -1,26 +1,127 @@
-# General EVM Security Audit Findings
+# General Solidity/EVM Security Audit Findings
 
-Audit of the Support subscription system contracts against the `evm-audit-general` checklist.
+**Scope**: Support.sol, SupportToken.sol, WithSupportTokens.sol, SupportRenderer.sol, DiscountHook.sol, EvmNowSupporterHook.sol, MaxSlotsHook.sol, and all interfaces.
 
-**Audited files:**
-- `contracts/Support.sol`
-- `contracts/SupportToken.sol`
-- `contracts/extensions/WithSupportTokens.sol`
-- `contracts/hooks/MaxSlotsHook.sol`
-- `contracts/hooks/DiscountHook.sol`
-- `contracts/interfaces/ISubscriptionHook.sol`
-- `contracts/interfaces/ISupportRenderer.sol`
-- `contracts/renderers/SupportRenderer.sol`
+**Compiler**: Solidity ^0.8.28
+
+**Date**: 2026-04-02
 
 ---
 
-## [G-1] Returndata bombing on excess refund call to untrusted address
+## [G-1] Reentrancy in `support()` via excess ETH refund before full state settlement
+**Severity**: Medium
+**Category**: evm-audit-general
+**Location**: `support()` in Support.sol:154-158
+**Description**: The `support()` function refunds excess ETH to `msg.sender` via a low-level `.call{value: excess}("")` at line 156. While all core state updates (`_applySubscription`, `_notifyHook`, `_afterSubscriptionChange`, and the `Supported` event) complete before the refund, there is no reentrancy guard on the function. If `msg.sender` is a contract, its `receive()`/`fallback()` can re-enter `support()`. On re-entry, `_resolveSubscription` will read the already-updated state, so the attacker cannot double-spend. However, the lack of a `nonReentrant` modifier means defense relies entirely on the correctness of the checks-effects-interactions pattern holding across all future code changes and hook implementations. This is a latent risk rather than an immediately exploitable bug.
+
+Additionally, external hook calls (`_notifyHook` at line 150) execute before the refund, meaning a malicious hook contract could cause unexpected behavior during the state between hook notification and refund completion.
+
+**Proof of Concept**: Deploy an attacker contract that calls `support()` with excess ETH. In the attacker's `receive()`, re-enter `support()`. Currently, the re-entrant call would process correctly because state is updated before the refund. The risk is latent: if any future state change is added after the refund, or if hook contracts introduce shared mutable state, the lack of a guard becomes exploitable.
+
+**Recommendation**: Add OpenZeppelin's `ReentrancyGuard` and apply `nonReentrant` to `support()`:
+```solidity
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart, ReentrancyGuard {
+    function support(...) external payable nonReentrant afterSaleStart {
+```
+
+---
+
+## [G-2] `withdraw()` uses `address(this).balance` which can be inflated via force-feeding
 **Severity**: Low
 **Category**: evm-audit-general
-**Location**: `Support.support()` at `contracts/Support.sol:156`
-**Description**: When refunding excess ETH to `msg.sender`, the contract uses `.call{value: excess}("")`. If `msg.sender` is a malicious contract, it can return a massive `bytes` payload in its `receive()`/`fallback()` function. Solidity automatically copies all returndata into memory, which consumes gas quadratically. This can grief the caller by wasting most of the remaining gas on memory allocation, potentially causing the transaction to fail with an out-of-gas error. The same pattern appears in `withdraw()` at line 247 but the recipient there is `owner()` (trusted).
-**Proof of Concept**: 1. Deploy an attacker contract whose `receive()` returns megabytes of data via assembly. 2. Call `support()` from the attacker contract with excess ETH. 3. The refund call at line 156 copies the massive returndata, consuming gas quadratically and potentially causing the transaction to revert.
-**Recommendation**: Use inline assembly to limit the returndata copy size:
+**Location**: `withdraw()` in Support.sol:239-245
+**Description**: The `withdraw()` function sends `address(this).balance` to the owner. ETH can be force-fed to the contract via `selfdestruct` from another contract, pre-computed CREATE2 addresses, or coinbase rewards. Since there is no `receive()`/`fallback()` function, normal ETH transfers will revert, but `selfdestruct` bypasses this. The inflated balance means `withdraw()` would send more ETH than was actually collected through subscriptions.
+
+In this case, this is not harmful -- it benefits the owner who receives extra ETH. However, if any future logic relies on `address(this).balance` matching expected subscription revenue, it would break. The contract does not currently use balance-based invariants beyond withdrawal, so the practical impact is limited.
+
+**Proof of Concept**: Deploy a contract with `selfdestruct(payable(supportContract))` to force-feed 1 ETH. The owner's next `withdraw()` call will include this extra ETH.
+
+**Recommendation**: Consider tracking collected revenue in an internal variable instead of relying on `address(this).balance`:
+```solidity
+uint256 public collectedRevenue;
+
+// In support():
+collectedRevenue += required;
+
+// In withdraw():
+uint256 amount = collectedRevenue;
+collectedRevenue = 0;
+(bool sent, ) = owner().call{value: amount}("");
+```
+
+---
+
+## [G-3] `addTier()` silently truncates tier index when more than 256 tiers exist
+**Severity**: Low
+**Category**: evm-audit-general
+**Location**: `addTier()` in Support.sol:226-230
+**Description**: The `addTier()` function casts `tierPrices.length - 1` to `uint8` in the `TierPriceUpdated` event at line 229. If more than 256 tiers are added, the cast silently wraps, emitting an incorrect tier index in the event. More critically, the tier parameter in `support()`, `grant()`, and throughout the system is `uint8`, meaning tiers beyond index 255 are unreachable by users despite existing in the `tierPrices` array. The `support()` function's check `tier >= tierPrices.length` uses `uint8 tier` which can never exceed 255, so tiers 256+ would be dead entries consuming storage.
+
+**Proof of Concept**: Call `addTier()` 257 times. The 257th tier (index 256) exists in `tierPrices` but can never be selected because the `tier` parameter is `uint8` (max 255). The event for this tier would emit `tier = 0` (wrapped).
+
+**Recommendation**: Add a cap check in `addTier()`:
+```solidity
+function addTier(uint128 priceUSD) external onlyOwner {
+    if (priceUSD == 0) revert InvalidPrice();
+    if (tierPrices.length >= type(uint8).max) revert InvalidTier();
+    tierPrices.push(priceUSD);
+    emit TierPriceUpdated(uint8(tierPrices.length - 1), priceUSD);
+}
+```
+
+---
+
+## [G-4] `safeTransferFrom` on the ERC-721 token triggers `onERC721Received` callback, creating a reentrancy vector during token transfer
+**Severity**: Low
+**Category**: evm-audit-general
+**Location**: `_update()` in WithSupportTokens.sol:66-87, and OpenZeppelin ERC721.safeTransferFrom
+**Description**: When a token is transferred via `safeTransferFrom`, the OpenZeppelin ERC721 calls `_update()` (which runs the `WithSupportTokens._update()` override including hook calls at lines 81-83), then calls `checkOnERC721Received()` on the recipient. If the recipient is a contract, its `onERC721Received` callback can re-enter the Support system. At that point, the subscription state has been updated (subscription mapping reassigned, hooks notified), but the callback occurs before `safeTransferFrom` returns to the caller. No reentrancy guard is present.
+
+The hook's external calls (`h.onRelease`, `h.onSubscribe`) at lines 81-83 are also made to a potentially owner-controlled but still external contract, compounding the attack surface during transfers.
+
+**Proof of Concept**: Transfer a token via `safeTransferFrom` to a malicious contract. The contract's `onERC721Received` re-enters `support()` to manipulate subscription state. Since subscription state is already updated, direct exploitation is limited, but cross-contract reentrancy (e.g., with MaxSlotsHook reading stale data) could be possible.
+
+**Recommendation**: Add a reentrancy guard to the `_update` function or to the entire contract using OpenZeppelin's `ReentrancyGuard`. Alternatively, document that hooks MUST NOT call back into the Support contract.
+
+---
+
+## [G-5] Malicious or buggy hook can permanently DoS all subscriptions
+**Severity**: Medium
+**Category**: evm-audit-general
+**Location**: `_beforeSubscribe()` in Support.sol:338-346, `_notifyHook()` in Support.sol:268-274
+**Description**: The `support()` function makes three external calls to the hook contract: `beforeSubscribe()` (line 128-130), `onRelease()` (line 271), and `onSubscribe()` (line 273). If the hook contract reverts on any of these calls, the entire `support()` transaction reverts. A malicious or buggy hook can therefore permanently block all new subscriptions and renewals.
+
+The `grant()` function (owner-only) also calls `_notifyHook()` at line 175, so even the owner cannot grant subscriptions if the hook reverts.
+
+The owner can call `setHook(ISubscriptionHook(address(0)))` to disable the hook, but this is a manual recovery step that requires awareness of the issue. During the window between hook failure and owner intervention, the system is fully DoS'd.
+
+**Proof of Concept**: Owner sets a hook that later gets paused or has a bug causing `revert` in `beforeSubscribe()`. All calls to `support()` and `grant()` revert. The owner must notice and call `setHook(address(0))` to recover.
+
+**Recommendation**: Wrap hook calls in try/catch to make them non-blocking, or at minimum wrap `onSubscribe`/`onRelease` (which are post-state-change notifications) in try/catch:
+```solidity
+function _notifyHook(ISubscriptionHook h, uint8 previousTier, uint8 tier, address recipient) internal {
+    if (address(h) == address(0)) return;
+    if (previousTier != NO_TIER && previousTier != tier) {
+        try h.onRelease(previousTier, recipient) {} catch {}
+    }
+    try h.onSubscribe(tier, recipient) {} catch {}
+}
+```
+Note: `beforeSubscribe` should remain reverting since it returns pricing adjustments that must be valid.
+
+---
+
+## [G-6] Returndata bombing on excess ETH refund call
+**Severity**: Low
+**Category**: evm-audit-general
+**Location**: `support()` in Support.sol:156
+**Description**: The refund at line 156 uses `msg.sender.call{value: excess}("")`. If `msg.sender` is a contract, it can return a massive `bytes` payload in its `receive()`/`fallback()`. Solidity automatically copies all returndata into memory, consuming gas quadratically. This can grief the caller by wasting gas, though the transaction would still succeed (the refund check passes). The same pattern exists in `withdraw()` at line 242, though there the recipient is the trusted owner.
+
+**Proof of Concept**: Deploy an attacker contract whose `receive()` returns 100KB of data via assembly. Call `support()` with overpayment. The refund call at line 156 copies 100KB from returndata, consuming significant gas.
+
+**Recommendation**: Use assembly to limit returndata copy size:
 ```solidity
 uint256 excess = msg.value - required;
 if (excess > 0) {
@@ -34,17 +135,34 @@ if (excess > 0) {
 
 ---
 
-## [G-2] Unbounded loop with external calls in MaxSlotsHook can cause DoS
+## [G-7] `_changeTier` time conversion is lossy -- downgrading to a cheaper tier loses subscription time to rounding
+**Severity**: Low
+**Category**: evm-audit-general
+**Location**: `_changeTier()` in Support.sol:286
+**Description**: The tier change calculation at line 286 converts remaining time using `uint256(remaining) * oldPrice / newPrice`. This integer division truncates. When downgrading from a cheaper to a more expensive tier (or when prices don't divide evenly), the user loses subscription time to rounding.
+
+For example: a user has 45 days remaining on a tier priced at 500 (cents). They upgrade to a tier priced at 700. The converted time is `45 * 500 / 700 = 32` days (actual: 32.14 days). The user loses ~0.14 days. With larger price ratios, the loss grows.
+
+**Proof of Concept**: Subscribe at tier 0 (price 500) for 3 months (90 days). After 45 days, upgrade to tier 1 (price 700) with duration 0. Remaining = 45 days. Converted = 45 * 500 / 700 = 32 days. Lost: ~3.4 hours.
+
+**Recommendation**: This is inherent to integer division and the amounts lost are small. Consider documenting this behavior or using higher precision intermediate calculations (e.g., multiply by 1e18 then divide back).
+
+---
+
+## [G-8] `MaxSlotsHook.onSubscribe()` iterates unbounded array, risking gas limit DoS
 **Severity**: Medium
 **Category**: evm-audit-general
-**Location**: `MaxSlotsHook.onSubscribe()` at `contracts/hooks/MaxSlotsHook.sol:65-72` and `_canSubscribe()` at lines 130-134
-**Description**: When all slots are occupied, `onSubscribe()` iterates over the entire `_tierHolders` array (up to `maxSlots[tier]`, a `uint16` supporting up to 65535 entries). Each iteration calls `_isActiveOnTier()`, which makes two external calls to the Support contract (`activeTokenOf` and `currentTier`). Additionally, `_canSubscribe()` performs the same loop and is called during `beforeSubscribe()`. This means the full loop executes twice per subscription when slots are full: once in `beforeSubscribe()` (view) and once in `onSubscribe()` (state-modifying). With large `maxSlots` values, this can exceed the block gas limit, permanently blocking new subscriptions for that tier.
-**Proof of Concept**: 1. Owner sets `maxSlots[0] = 1000`. 2. 1000 subscribers fill all slots. 3. When all 1000 are active, any new subscriber triggers 2000 external calls (1000 in `_canSubscribe` + 1000 in `onSubscribe`), likely exceeding gas limits.
-**Recommendation**: Set a reasonable upper bound on `maxSlots` in `setMaxSlots()`, for example a maximum of 256. Alternatively, maintain a counter of active holders instead of scanning the full array:
+**Location**: `onSubscribe()` in MaxSlotsHook.sol:60-67
+**Description**: When the `_tierHolders[tier]` array is full (length == maxSlots), `onSubscribe()` iterates through ALL holders at lines 60-67 to find an expired one to replace. Each iteration makes two external calls to the Support contract (`subscription()` and `currentTier()` via `_isActiveOnTier()`). If `maxSlots` is set to a large value (e.g., 1000), this loop makes up to 2000 external calls, which will exceed the block gas limit and permanently DoS subscriptions for that tier.
+
+The same issue affects `_canSubscribe()` (lines 126-129) and `activeTierHolders()` (lines 103-115).
+
+**Proof of Concept**: Set `maxSlots[0] = 500`. Fill tier 0 with 500 active subscribers. When subscriber 501 tries to subscribe and the loop must check all 500, the gas cost (~2000 SLOAD-equivalent external calls at ~2600 gas each = ~5.2M gas just for the calls) approaches block gas limit.
+
+**Recommendation**: Maintain a counter of active holders per tier, or implement a lazy cleanup mechanism that tracks the last-checked index instead of iterating from zero each time. Alternatively, enforce a reasonable maximum for `maxSlots`:
 ```solidity
 function setMaxSlots(uint8 tier, uint16 max) external onlyOwner {
-    if (tier >= 4) revert InvalidTier();
-    if (max > 256) revert MaxSlotsTooHigh(); // add a reasonable cap
+    require(max <= 100, "Max slots too high");
     maxSlots[tier] = max;
     emit MaxSlotsUpdated(tier, max);
 }
@@ -52,164 +170,188 @@ function setMaxSlots(uint8 tier, uint16 max) external onlyOwner {
 
 ---
 
-## [G-3] No reentrancy guard on payable `support()` function
-**Severity**: Low
-**Category**: evm-audit-general
-**Location**: `Support.support()` at `contracts/Support.sol:112-159`
-**Description**: The `support()` function makes multiple external calls: (1) `_beforeSubscribe()` calls the hook's `beforeSubscribe()` (view), (2) `_notifyHook()` calls `h.onRelease()` and `h.onSubscribe()` (state-modifying), and (3) the excess refund sends ETH to `msg.sender` via `.call`. While the code broadly follows the checks-effects-interactions pattern (state is updated in `_applySubscription` before hook notification and refund), there is no `nonReentrant` guard. If a malicious caller re-enters during the excess refund, they could call `support()` again with a different recipient. The hook contract set by the owner is semi-trusted, but a malicious or compromised hook could exploit intermediate state during `onSubscribe`/`onRelease` callbacks.
-**Proof of Concept**: 1. Attacker deploys a contract that calls `support()` from its `receive()` function. 2. Attacker calls `support()` with excess ETH. 3. During the excess refund at line 156, the attacker's `receive()` re-enters `support()`. 4. While state is updated at this point, the attacker gets an additional subscription call before the first call's event is emitted.
-**Recommendation**: Add OpenZeppelin's `ReentrancyGuard` and apply `nonReentrant` to `support()`:
-```solidity
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
-abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart, ReentrancyGuard {
-    function support(...) external payable afterSaleStart nonReentrant {
-```
-
----
-
-## [G-4] Downgrading to a free tier ($0 price) does not convert remaining value into extended time
+## [G-9] Subscription can be transferred to an address that already has a different subscription, orphaning the recipient's existing subscription
 **Severity**: Medium
 **Category**: evm-audit-general
-**Location**: `Support._changeTier()` at `contracts/Support.sol:297-301`
-**Description**: When a subscriber downgrades to a tier with `tierPrices[toTier] == 0`, the conversion formula at line 297-298 sets `converted = uint256(remaining)`, meaning the subscriber keeps only the same number of seconds remaining. This means a user who paid for an expensive tier (e.g., $50/mo Partner) and downgrades to a free tier ($0/mo Supporter) loses all the dollar-value they prepaid. For example, a user with 15 days remaining on a $50/mo tier should logically receive infinite (or capped) time on a $0/mo tier, but instead receives only 15 days. This is a silent loss of value for users and contradicts the conversion logic used for non-zero tier downgrades, which proportionally extends time.
-**Proof of Concept**: 1. User subscribes to tier 3 ($50/mo) for 1 month, paying ~$50 worth of ETH. 2. After 15 days, user downgrades to tier 0 ($0/mo free). 3. User receives only 15 days on the free tier instead of the proportional value remaining. 4. The ~$25 of remaining value is effectively lost.
-**Recommendation**: When `newPrice == 0`, cap the converted duration at `type(uint64).max` or a large value rather than just using `remaining`:
+**Location**: `_update()` in WithSupportTokens.sol:76
+**Description**: The `OnePerWallet` extension prevents an address from holding more than one token. However, if address A holds token 1 (with an active subscription) and address B holds token 2 (also active), B can transfer token 2 to A only if A first transfers token 1 away. But there is a subtler issue: at line 76, `subscription[to] = tokenId` unconditionally overwrites the recipient's subscription mapping. If the recipient previously had a subscription that expired (token still owned but subscription inactive), and then receives a new token via transfer, their old `subscription` mapping is overwritten. The old token's subscription data (`startedAt`, `expiresAt`, `tierHistory`) remains in storage but is no longer linked to any address.
+
+More critically, the `_update` hook at line 76 sets `subscription[to] = tokenId` for the incoming token, but if `to` already had a different `subscription[to]` value pointing to another token they own... the `OnePerWallet` constraint prevents this for active tokens, but edge cases with expired tokens could cause state inconsistency.
+
+**Proof of Concept**: 
+1. Alice subscribes, gets token 1, subscription expires
+2. Bob subscribes, gets token 2, still active
+3. Alice transfers token 1 to someone else (or it was already transferred)
+4. Bob transfers token 2 to Alice
+5. `subscription[Alice]` is now token 2; token 1's data is orphaned
+
+**Recommendation**: In the `_update` hook, verify that the recipient does not already have an active subscription mapped to a different token:
 ```solidity
-uint256 converted = newPrice == 0
-    ? type(uint64).max  // free tier: give maximum time
-    : uint256(remaining) * oldPrice / newPrice;
-```
-Alternatively, if the intent is to not extend time on free tiers, document this clearly and emit an event so users understand the trade-off.
-
----
-
-## [G-5] PUSH0 opcode incompatibility with some L2s and alt-chains
-**Severity**: Low
-**Category**: evm-audit-general
-**Location**: All contract files, `pragma solidity ^0.8.28`
-**Description**: All contracts use `pragma solidity ^0.8.28`. Solidity versions >= 0.8.20 emit the `PUSH0` opcode by default. This opcode is not supported on several L2 networks and alternative EVM chains (e.g., older versions of Arbitrum, zkSync Era, some Polygon zkEVM versions). If these contracts are intended for multi-chain deployment, they will fail to execute on chains that do not support `PUSH0`.
-**Proof of Concept**: Compile and attempt to deploy to a chain that does not support `PUSH0` (e.g., zkSync Era). The deployment will fail or the contract will behave unexpectedly.
-**Recommendation**: If multi-chain deployment is planned, either target the EVM version explicitly in the compiler settings (`evmVersion: "paris"` which uses `PUSH0`, or `"shanghai"`) or use an older Solidity version. If only deploying to mainnet and L2s that support Shanghai, this is informational only.
-
----
-
-## [G-6] `withdraw()` uses `address(this).balance` which includes force-fed ETH
-**Severity**: Info
-**Category**: evm-audit-general
-**Location**: `Support.withdraw()` at `contracts/Support.sol:244-250`
-**Description**: The `withdraw()` function sends `address(this).balance` to the owner. ETH can be force-fed to the contract via `selfdestruct`, pre-computed CREATE2 addresses, or coinbase rewards, inflating the balance beyond what was collected from subscriptions. In this contract, this is not exploitable because the owner receives all funds regardless, and there is no accounting invariant that depends on balance matching collected payments. However, the `Withdrawal` event at line 249 may log an amount that does not match the sum of subscription payments, which could confuse off-chain accounting.
-**Proof of Concept**: 1. Force-send 1 ETH via `selfdestruct` to the Support contract. 2. Owner calls `withdraw()`. 3. Owner receives subscription payments plus the force-fed 1 ETH. 4. The `Withdrawal` event amount does not match the sum of `Supported` event payments.
-**Recommendation**: This is informational. If accurate accounting is important, track collected payments in a state variable and withdraw only that amount:
-```solidity
-uint256 public collectedPayments;
-// In support(): collectedPayments += required;
-// In withdraw(): use collectedPayments instead of address(this).balance
-```
-
----
-
-## [G-7] Hook external calls during `support()` can revert and block subscriptions
-**Severity**: Medium
-**Category**: evm-audit-general
-**Location**: `Support._notifyHook()` at `contracts/Support.sol:273-279` and `Support._beforeSubscribe()` at lines 356-364
-**Description**: The `support()` function makes external calls to the hook contract at two points: `beforeSubscribe()` (view call) and `onSubscribe()`/`onRelease()` (state-modifying calls). If the hook contract reverts for any reason (bug, gas limit, intentional blocking), all subscriptions are blocked. The hook is set by the owner, so this is a trust assumption. However, if the hook contract is upgradeable, compromised, or has a bug that causes it to revert under certain conditions, it creates a denial-of-service for all subscribers. There is no try/catch wrapper, no fallback mechanism, and no emergency way to bypass the hook without the owner calling `setHook(address(0))`.
-**Proof of Concept**: 1. Owner sets a hook contract. 2. The hook contract has a bug that causes `onSubscribe()` to revert for a specific tier. 3. All subscriptions to that tier are permanently blocked until the owner notices and updates or removes the hook.
-**Recommendation**: Consider wrapping hook calls in a try/catch so that a failing hook does not block subscriptions. At minimum, document this risk. A safer pattern:
-```solidity
-function _notifyHook(ISubscriptionHook h, uint8 previousTier, uint8 tier, address recipient) internal {
-    if (address(h) == address(0)) return;
-    if (previousTier != type(uint8).max && previousTier != tier) {
-        try h.onRelease(previousTier, recipient) {} catch {}
-    }
-    try h.onSubscribe(tier, recipient) {} catch {}
+if (to != address(0)) {
+    uint256 existingSub = subscription[to];
+    // Only allow if no existing active subscription or same token
+    require(existingSub == 0 || existingSub == tokenId || block.timestamp >= expiresAt[existingSub], "Active sub exists");
 }
 ```
-Note: this changes the security model -- a reverting hook can no longer block subscriptions (e.g., MaxSlotsHook's TierFull revert would be swallowed). Consider making this behavior configurable or having a separate "mandatory" vs "optional" hook pattern.
 
 ---
 
-## [G-8] MaxSlotsHook `_canSubscribe` and `onSubscribe` can diverge due to state changes between calls
-**Severity**: Medium
-**Category**: evm-audit-general
-**Location**: `MaxSlotsHook.beforeSubscribe()` at `contracts/hooks/MaxSlotsHook.sol:39-46` and `MaxSlotsHook.onSubscribe()` at lines 52-75
-**Description**: The `beforeSubscribe()` function calls `_canSubscribe()` to check if a slot is available (view call). Later, `onSubscribe()` is called to actually assign the slot. Between these two calls, the Support contract calls `_applySubscription()` which modifies state (updating `activeToken`, `expiresAt`, segments). This means the `_isActiveOnTier()` checks in `_canSubscribe()` and `onSubscribe()` may see different state. Specifically, if the subscriber's token state changes between the two calls (e.g., a new active token is set, changing their tier), `_canSubscribe()` may return true while `onSubscribe()` reverts with `TierFull()`, or vice versa. This is a time-of-check-time-of-use (TOCTOU) issue.
-**Proof of Concept**: 1. Tier 0 has maxSlots = 2, with 2 active holders. 2. One holder's subscription has just expired but `_isActiveOnTier` still returns true because `activeTokenOf` returns a different active token on the same tier. 3. `_canSubscribe` finds an inactive slot, returns true. 4. Between `beforeSubscribe` and `onSubscribe`, `_applySubscription` updates the subscriber's state. 5. `onSubscribe` re-scans and may now see different results for `_isActiveOnTier` due to the changed `activeToken` mapping.
-**Recommendation**: Consider combining the check-and-assign into a single `onSubscribe` call, or accept the TOCTOU gap as a design trade-off since both calls happen in the same transaction and the state changes between them are limited to the subscriber being processed.
-
----
-
-## [G-9] `MaxSlotsHook.onSubscribe` and `onRelease` lack access control beyond `onlySupport`
-**Severity**: Low
-**Category**: evm-audit-general
-**Location**: `MaxSlotsHook.onSubscribe()` at `contracts/hooks/MaxSlotsHook.sol:52` and `onRelease()` at line 77
-**Description**: The `onSubscribe` and `onRelease` functions are protected by `onlySupport`, meaning only the Support contract can call them. However, the Support contract calls `onRelease` before `onSubscribe` in `_notifyHook()`. If the hook's `onSubscribe` reverts (e.g., `TierFull`), the `onRelease` has already executed, removing the subscriber from their previous tier. This is not rolled back because the entire transaction reverts. Wait -- actually, since `onRelease` and `onSubscribe` are called in the same transaction, a revert in `onSubscribe` WILL roll back the `onRelease` state change. So this is fine. However, a more subtle issue: `_notifyHook` calls `onSubscribe` unconditionally for every subscription action (including extensions at the same tier). `MaxSlotsHook.onSubscribe` handles this with the early return at line 55 (`if (_tierHolderIndex[tier][subscriber] != 0) return`), but other hook implementations might not be as careful.
-**Proof of Concept**: This is a defense-in-depth concern for future hook implementations rather than a concrete exploit on current code.
-**Recommendation**: Consider documenting in the `ISubscriptionHook` interface that `onSubscribe` may be called multiple times for the same subscriber on the same tier (for extensions), and implementations must handle this idempotently.
-
----
-
-## [G-10] Tier change to same-priced tier follows downgrade path instead of no-op
-**Severity**: Low
-**Category**: evm-audit-general
-**Location**: `Support._changeTier()` at `contracts/Support.sol:289-301`
-**Description**: When changing between two tiers that have equal prices (e.g., both are $10/mo), the condition `newPrice > oldPrice` at line 289 is false, so the code follows the downgrade path. In the equal-price case, `converted = remaining * oldPrice / newPrice = remaining`, which is correct (time stays the same). However, the subscriber is still charged `_baseCost(adj.adjustedUSD)` at line 296, where `adjustedUSD` is based on `tierPrices[tier] * duration`. Since tier changes allow `duration == 0`, the cost could be 0. But if `duration > 0` is passed, the subscriber pays for additional months AND keeps their remaining time, effectively getting more value than intended compared to the upgrade path where the additional duration cost is added to the differential. This inconsistency between the upgrade and downgrade/equal paths could be confusing.
-**Proof of Concept**: 1. Two tiers both priced at $10/mo. 2. Subscriber on tier A with 20 days remaining calls `_changeTier` to tier B with `duration = 1`. 3. Subscriber pays for 1 month AND keeps the 20 days remaining. 4. If tier B were $1 more expensive, the upgrade path would charge the differential plus the monthly cost, giving a different result.
-**Recommendation**: Document this behavior explicitly, or add a separate code path for equal-price tier changes that applies the same logic as the upgrade path (charge differential of $0 + additional months).
-
----
-
-## [G-11] `_changeTier` upgrade path charges pro-rated differential using raw seconds instead of monthly fractions
-**Severity**: Low
-**Category**: evm-audit-general
-**Location**: `Support._changeTier()` at `contracts/Support.sol:290`
-**Description**: The upgrade cost formula `uint256(newPrice - oldPrice) * remaining / 30 days` computes the USD cost by treating `remaining` as raw seconds and dividing by `30 days` (2592000 seconds). Tier prices are per-month values. The calculation is mathematically correct for pro-rating, but `30 days` is a fixed approximation of a month (not a calendar month). Since subscriptions also use `30 days` as the month length in `_addDuration()`, this is internally consistent. However, `remaining` could be a value that is not a clean multiple of `30 days` (e.g., if a hook adjusted the start time or previous tier changes created odd remainders), leading to small rounding losses in the pro-rated amount. This always rounds down (in favor of the subscriber), so it is not exploitable but creates minor accounting imprecision.
-**Proof of Concept**: Subscriber has exactly 15 days + 1 second remaining. The differential for the remaining 1 second is `(newPrice - oldPrice) * 1 / 2592000`, which rounds to 0 for small price differences, giving the subscriber a free second of the more expensive tier.
-**Recommendation**: Informational. The rounding always favors the subscriber, which is a safe default. No change needed unless exact accounting is required.
-
----
-
-## [G-12] `DiscountHook.onSubscribe` and `onRelease` are no-ops without access control
+## [G-10] PUSH0 opcode compatibility concern with Solidity ^0.8.28
 **Severity**: Info
 **Category**: evm-audit-general
-**Location**: `DiscountHook.onSubscribe()` at `contracts/hooks/DiscountHook.sol:40` and `onRelease()` at line 41
-**Description**: Unlike `MaxSlotsHook`, the `DiscountHook` does not restrict `onSubscribe` and `onRelease` to be callable only by the Support contract. Anyone can call these functions, though they are no-ops (empty function bodies). This is not a security issue since the functions do nothing, but it deviates from the `MaxSlotsHook` pattern and could become a problem if the functions are later given a body without adding access control.
-**Proof of Concept**: Any address can call `discountHook.onSubscribe(0, address(0))` without error.
-**Recommendation**: Add `onlySupport` (or similar) modifiers for consistency with `MaxSlotsHook`, even though the functions are currently no-ops:
-```solidity
-address public immutable support;
-modifier onlySupport() { require(msg.sender == support); _; }
+**Location**: All contracts, `pragma solidity ^0.8.28`
+**Description**: Solidity >=0.8.20 emits the `PUSH0` opcode by default. This opcode is supported on Ethereum mainnet (post-Shanghai) and most major L2s (Arbitrum, Optimism, Base) as of 2025. However, some chains (e.g., older zkSync versions, some alt-L1s) may not support it. If the contract is intended for deployment on chains that do not support PUSH0, compilation will produce incompatible bytecode.
 
-function onSubscribe(uint8, address) external override onlySupport {}
-function onRelease(uint8, address) external override onlySupport {}
+**Proof of Concept**: Compile with Solidity 0.8.28 and inspect bytecode for PUSH0 (0x5f). Deploy to a chain that does not support it -- deployment will fail.
+
+**Recommendation**: If multi-chain deployment is planned, verify PUSH0 support on all target chains. If needed, use `--evm-version paris` in the compiler settings to avoid PUSH0.
+
+---
+
+## [G-11] `DiscountHook.setDiscount()` allows setting `percentOff = 100`, making subscriptions free
+**Severity**: Low
+**Category**: evm-audit-general
+**Location**: `setDiscount()` in DiscountHook.sol:47-52
+**Description**: The validation `if (_percentOff > 100) revert InvalidDiscount()` allows `percentOff = 100`. When this is set and the duration meets `minMonths`, `adjustedUSD` becomes `baseUSD * 0 / 100 = 0`, making the subscription free. While this may be intentional for promotional use, it could also be an off-by-one if the intent was to cap at 99%.
+
+Combined with `minMonths = 0`, ALL subscriptions become free regardless of duration, which would drain the system's revenue model.
+
+**Proof of Concept**: Owner calls `setDiscount(0, 100)`. All subscriptions now have `adjustedUSD = 0`, requiring 0 ETH payment.
+
+**Recommendation**: If 100% discount is not intended, change the check to `>= 100`. If it is intended, add a separate `minMonths > 0` validation to prevent the zero-months edge case:
+```solidity
+if (_percentOff >= 100) revert InvalidDiscount();
+// or if 100% is OK:
+if (_percentOff > 100) revert InvalidDiscount();
+if (_percentOff == 100 && _minMonths == 0) revert InvalidDiscount();
 ```
 
 ---
 
-## [G-13] `DiscountHook` allows setting `percentOff = 100`, making subscriptions free
+## [G-12] Hook's `adjustedStart` can be set to any past timestamp, creating backdated subscriptions with distorted `startedAt`
 **Severity**: Low
 **Category**: evm-audit-general
-**Location**: `DiscountHook.setDiscount()` at `contracts/hooks/DiscountHook.sol:43-48` and constructor at lines 18-21
-**Description**: The `percentOff` parameter accepts values up to and including 100 (`if (_percentOff > 100) revert`). Setting `percentOff = 100` means `adjustedUSD = baseUSD * (100 - 100) / 100 = 0`, making all qualifying subscriptions free. While the owner may intentionally want to offer free subscriptions, this bypasses the `grant()` function's purpose and could be set accidentally. Combined with a `minMonths = 1`, this would make all subscriptions completely free.
-**Proof of Concept**: 1. Owner calls `setDiscount(1, 100)`. 2. Any user can now subscribe to any tier for any duration (>= 1 month) at zero cost.
-**Recommendation**: Consider whether 100% discount is intended. If not, change the check to `if (_percentOff >= 100) revert InvalidDiscount();`. If it is intended, document this behavior.
+**Location**: `support()` in Support.sol:138
+**Description**: The `beforeSubscribe` hook can return an `adjustedStart` value that sets the subscription's `startedAt` to any timestamp, including one in the distant past or future. At line 138, `if (adj.adjustedStart != 0) start = adj.adjustedStart;` unconditionally accepts the hook's timestamp. A backdated start combined with a normal expiry would create a subscription that appears to have been active for longer than it actually was (affecting tier history display and renderer calculations). A future-dated start would create a subscription where `startedAt > block.timestamp`, causing underflow in the renderer's `_buildSVG` at line 54: `block.timestamp - data.startedAt`.
+
+This is trust-model dependent -- the hook is set by the owner, so a malicious hook implies a compromised owner. However, a buggy hook could inadvertently cause the renderer to revert.
+
+**Proof of Concept**: Deploy a hook that returns `adjustedStart = block.timestamp + 365 days`. Subscribe. Call `tokenURI()` -- the renderer computes `block.timestamp - data.startedAt` which underflows and reverts (Solidity 0.8.x checked arithmetic).
+
+**Recommendation**: Validate `adjustedStart` in `support()`:
+```solidity
+if (adj.adjustedStart != 0) {
+    if (adj.adjustedStart > block.timestamp) revert InvalidDuration();
+    start = adj.adjustedStart;
+}
+```
 
 ---
 
-## [G-14] `WithSupportTokens._activeTokenOf` iterates all tokens owned by a supporter
+## [G-13] `grant()` allows owner to set a past `startAt` timestamp, potentially causing renderer underflow
 **Severity**: Low
 **Category**: evm-audit-general
-**Location**: `WithSupportTokens._activeTokenOf()` at `contracts/extensions/WithSupportTokens.sol:148-163`
-**Description**: When the cached `activeToken` for a supporter is expired or zero, the function falls back to iterating ALL tokens owned by the supporter via `balanceOf` and `tokenOfOwnerByIndex`. If a supporter accumulates many expired NFT tokens (they can receive unlimited support tokens via third-party subscriptions or transfers), this scan becomes expensive. Since `_activeTokenOf` is called indirectly during `support()` (via `_syncActiveToken` -> `_resolveSubscription`), a supporter with many tokens could face increasingly expensive subscription transactions.
-**Proof of Concept**: 1. A supporter receives 500 NFT tokens via transfers (all expired). 2. Supporter calls `support()` to create a new subscription. 3. `_activeTokenOf` iterates all 500 tokens before concluding none are active, consuming significant gas.
-**Recommendation**: Consider adding a cap on the scan or maintaining a more efficient data structure for active token lookup. Alternatively, allow users to manually clear their `activeToken` pointer.
+**Location**: `grant()` in Support.sol:170, SupportRenderer._buildSVG():54
+**Description**: The `grant()` function accepts a `startAt` parameter with no validation that it is in the past or future. If the owner sets `startAt` to a future timestamp, the `_buildSVG` function will compute `block.timestamp - data.startedAt` which underflows and reverts, breaking `tokenURI()` for that token until the timestamp passes.
+
+Similarly, if `startAt` is very far in the past, `dayNum` could become extremely large, but this is only a display issue.
+
+**Proof of Concept**: Owner calls `grant(alice, 0, 1, uint64(block.timestamp + 30 days))`. Alice's token's `tokenURI()` will revert for 30 days due to underflow at `block.timestamp - data.startedAt`.
+
+**Recommendation**: Validate that `startAt <= block.timestamp` in `grant()`, or handle the case in the renderer:
+```solidity
+// In grant():
+if (startAt > block.timestamp) revert InvalidDuration();
+
+// Or in renderer:
+uint256 dayNum = block.timestamp >= data.startedAt
+    ? (block.timestamp - data.startedAt) / 1 days + 1
+    : 0;
+```
 
 ---
 
-## [G-15] `_mint` used instead of `_safeMint` -- tokens may be locked in non-ERC721-receiver contracts
+## [G-14] No `receive()`/`fallback()` function, but contract holds ETH between `support()` and `withdraw()`
 **Severity**: Info
 **Category**: evm-audit-general
-**Location**: `WithSupportTokens._onNewSubscription()` at `contracts/extensions/WithSupportTokens.sol:141`
-**Description**: The contract uses `_mint` instead of `_safeMint` when creating new subscription tokens. `_safeMint` calls `onERC721Received` on the recipient if it is a contract, ensuring the recipient can handle ERC721 tokens. With `_mint`, tokens can be sent to contracts that do not implement the ERC721 receiver interface, permanently locking the token. However, since subscriptions are tied to addresses (not tokens), a locked token does not prevent the recipient from getting a new subscription -- it just means the NFT representation is inaccessible. Additionally, using `_mint` avoids a reentrancy vector (no `onERC721Received` callback).
-**Proof of Concept**: 1. Call `support(contractAddress, 0, 1)` where `contractAddress` is a contract without `onERC721Received`. 2. The token is minted to the contract but can never be transferred out.
-**Recommendation**: This appears to be an intentional design choice to avoid reentrancy. Document that `_mint` is used deliberately. If ERC721 receiver checking is desired, use `_safeMint` with a reentrancy guard.
+**Location**: Support.sol (entire contract)
+**Description**: The contract correctly omits `receive()` and `fallback()` functions, meaning it can only receive ETH via `payable` functions (`support()`). This is a positive security property. However, the `NothingToWithdraw` check at line 241 (`if (balance == 0) revert`) could be affected by selfdestruct force-feeding -- the owner would always be able to withdraw even if no subscriptions were made. This is benign (free ETH for the owner) but worth noting.
+
+**Proof of Concept**: N/A -- informational only.
+
+**Recommendation**: No action required. This is a positive design note.
+
+---
+
+## [G-15] `_lastTier()` reverts on subscriptionId with empty `tierHistory`, but this should be unreachable
+**Severity**: Info
+**Category**: evm-audit-general
+**Location**: `_lastTier()` in Support.sol:331-334
+**Description**: `_lastTier()` accesses `periods[periods.length - 1]` without checking that the array is non-empty. If `tierHistory[subscriptionId]` is empty, this reverts with an array out-of-bounds error. This is called from `_resolveSubscription` (line 264) when `subscriptionId != 0`, and from `currentTier` (line 201) and `_applySubscription` (line 314).
+
+In normal operation, `tierHistory` is populated when a subscription is first created (`_applySubscription` at line 313), and `delete tierHistory[subscriptionId]` (line 312) is immediately followed by a `push`. So an empty array should be unreachable for any valid subscriptionId. However, if a subscriptionId were somehow created without a `tierHistory` entry (e.g., through a future code change), `_lastTier` would revert without a clear error message.
+
+**Proof of Concept**: Not reachable under current code. Would require a code modification that creates a subscription without populating tierHistory.
+
+**Recommendation**: Consider adding a descriptive revert:
+```solidity
+function _lastTier(uint256 subscriptionId) internal view returns (uint8) {
+    TierPeriod[] storage periods = tierHistory[subscriptionId];
+    require(periods.length > 0, "No tier history");
+    return periods[periods.length - 1].tier;
+}
+```
+
+---
+
+## [G-16] Hook call to non-existent address returns true silently (call to address with no code)
+**Severity**: Info
+**Category**: evm-audit-general
+**Location**: `_notifyHook()` in Support.sol:268-274, `_beforeSubscribe()` in Support.sol:338-346
+**Description**: The hook functions check `address(h) == address(0)` before calling, but do not verify `address(h).code.length > 0`. If the owner sets a hook to an EOA or a self-destructed contract, the calls to `beforeSubscribe`, `onSubscribe`, and `onRelease` would behave unpredictably. For `beforeSubscribe` (which is `view` and returns data), calling an address with no code via a high-level Solidity call would revert (since there's no code to return the expected ABI-encoded struct). For `onSubscribe`/`onRelease` (which return nothing), the call would succeed silently as a no-op.
+
+The `address(h) == address(0)` guard handles the "no hook" case, and `setHook` is owner-only, so this requires owner error.
+
+**Proof of Concept**: Owner calls `setHook(someEOA)`. Next `support()` call reverts on `beforeSubscribe` because the EOA has no code to return `Adjustments memory`.
+
+**Recommendation**: Add a code-existence check in `setHook`:
+```solidity
+function setHook(ISubscriptionHook _hook) external onlyOwner {
+    if (address(_hook) != address(0) && address(_hook).code.length == 0) revert InvalidHook();
+    hook = _hook;
+    emit HookUpdated(address(_hook));
+}
+```
+
+---
+
+## [G-17] `_changeTier` division in cost supplement calculation may charge slightly less than expected due to rounding
+**Severity**: Info
+**Category**: evm-audit-general
+**Location**: `_changeTier()` in Support.sol:293
+**Description**: At line 293, the supplemental cost for upgrading is calculated as:
+```solidity
+required += _baseCost(uint256(newPrice) * (minExpiry - rawExpiry) / 30 days);
+```
+The division by `30 days` (2,592,000 seconds) truncates. For example, if `newPrice = 1000` (in 8-decimal USD) and `(minExpiry - rawExpiry) = 1,000,000` seconds, the USD amount is `1000 * 1000000 / 2592000 = 385` (truncated from 385.8). The user pays slightly less than the true pro-rated cost. Over many transactions, this benefits users at the protocol's expense, but the amounts are negligible.
+
+**Proof of Concept**: Arithmetic rounding inherent to integer division. The maximum loss per transaction is less than 1 unit of the price precision.
+
+**Recommendation**: No action required. Standard integer math behavior. Consider rounding up if strictness is desired:
+```solidity
+uint256 usdSupplement = (uint256(newPrice) * (minExpiry - rawExpiry) + 30 days - 1) / 30 days;
+```
+
+---
+
+## [G-18] `tierHistory` array can grow unboundedly via repeated tier changes
+**Severity**: Info
+**Category**: evm-audit-general
+**Location**: `_applySubscription()` in Support.sol:314-315
+**Description**: Each tier change pushes a new `TierPeriod` to `tierHistory[subscriptionId]`. There is no limit on the number of tier changes per subscription. Over many tier changes, this array grows, increasing gas costs for `tokenURI()` (which reads the full array in `_attributes()` at SupportRenderer.sol:116) and for `tierPeriods()`. In extreme cases, `tokenURI()` could exceed gas limits.
+
+In practice, each tier change requires payment, so this is self-limiting economically. The array is also reset when a subscription expires and is reactivated (line 312).
+
+**Proof of Concept**: Change tiers 100 times on a single subscription. Each `tokenURI()` call must iterate all 100 tier periods to build attributes, increasing gas cost linearly.
+
+**Recommendation**: Consider capping the number of tier periods stored, or only storing the N most recent periods.

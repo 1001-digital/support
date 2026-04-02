@@ -1,35 +1,66 @@
 # ERC-721 Security Audit Findings
 
-**Contracts audited:**
-- `contracts/Support.sol`
-- `contracts/SupportToken.sol`
-- `contracts/extensions/WithSupportTokens.sol`
-- `contracts/hooks/MaxSlotsHook.sol`
-- `contracts/hooks/DiscountHook.sol`
-- `contracts/interfaces/ISubscriptionHook.sol`
-- `contracts/interfaces/ISupportRenderer.sol`
-- `contracts/renderers/SupportRenderer.sol`
-
-**Checklist:** `evm-audit-erc721`
+**Scope**: ERC-721 implementation in `WithSupportTokens.sol`, `OnePerWallet.sol`, and related contracts
+**Checklist**: `evm-audit-erc721`
+**Date**: 2026-04-02
 
 ---
 
-## [NFT-1] `_mint` used instead of `_safeMint` -- tokens sent to contracts may be permanently locked
+## Checklist Walkthrough
 
-**Severity**: Medium
+### Dual Standard Tokens (ERC721 + ERC1155)
+No issues found. The contract implements only ERC721 (via OpenZeppelin) and does not implement ERC1155. `supportsInterface` adds ERC-4906 (`0x49064906`) on top of the standard ERC721 interface. No dual-standard ambiguity.
+
+### Legacy & Wrapped NFTs
+Not applicable. This contract is the NFT itself, not a protocol consuming external NFTs.
+
+### Multiple Collections on One Contract
+Not applicable. The contract hosts a single collection. `setApprovalForAll` and `totalSupply()` apply to one collection only.
+
+### Token ID Quirks
+No issues found. Token IDs are sequential starting from 1 (`++_subscriptionIdCounter` in `_applySubscription` at `Support.sol:305`). No large or encoded token IDs, no skipped IDs.
+
+### Self-Destructing / Auto-Burning NFTs
+Not applicable. Tokens are never burned by this contract (no burn path exists in `_onNewSubscription`, `_update`, or any other function).
+
+### Upgradeable and Pausable NFTs
+Not applicable. The contracts are not upgradeable (no proxy pattern) and not pausable. `renounceOwnership()` reverts unconditionally (`Support.sol:103`), which is a good safety measure.
+
+### NFT Permit (ERC-4494)
+Not applicable. No permit mechanism is implemented.
+
+### Airdrops and Breeding
+Not applicable. The contract does not hold external NFTs.
+
+### Fractionalized NFTs
+Not applicable. No fractionalization mechanism exists.
+
+### Constructor Minting Without Events
+No issues found. No minting occurs in the constructor. Tokens are minted via `_mint()` in `_onNewSubscription()` (`WithSupportTokens.sol:92`), which emits standard `Transfer` events.
+
+### ERC721 `transferFrom` vs `safeTransferFrom`
+See finding NFT-1 below regarding `_mint` vs `_safeMint`.
+
+### `from` parameter in `transferFrom`
+Not applicable. The contract does not expose a custom `transferFrom` with a user-supplied `from`. Standard ERC721 `transferFrom` uses `_update` with `auth = msg.sender` for authorization.
+
+---
+
+## Findings
+
+## [NFT-1] `_mint` used instead of `_safeMint` -- tokens can be lost to non-receiver contracts
+**Severity**: Low
 **Category**: evm-audit-erc721
-**Location**: `WithSupportTokens._onNewSubscription()` at `extensions/WithSupportTokens.sol:141`
+**Location**: `_onNewSubscription()` at `WithSupportTokens.sol:92`
+**Description**: When a new subscription is created, the token is minted via `_mint(recipient, tokenId)` rather than `_safeMint(recipient, tokenId)`. The `_mint` function does not invoke `onERC721Received` on the recipient. If the recipient is a contract that does not implement `IERC721Receiver`, the token will be minted but permanently inaccessible (the contract cannot transfer it out).
 
-**Description**: The `_onNewSubscription` callback uses `_mint(recipient, tokenId)` instead of `_safeMint(recipient, tokenId)`. Per the ERC-721 standard, `_safeMint` calls `onERC721Received` on the recipient contract, allowing it to accept or reject the token. With `_mint`, if a third party calls `support(contractAddress, tier, duration)` for a contract recipient that does not implement `IERC721Receiver`, the token will be minted to that contract but will be permanently stuck -- the contract has no way to transfer it out.
-
-This is particularly relevant because `support()` explicitly allows third parties to subscribe on behalf of others (`msg.sender != recipient` is a supported code path). A well-meaning supporter could lock an NFT inside a multisig, governance contract, or any contract that lacks ERC-721 receiver support.
+In this system, subscriptions are typically created by calling `support(recipient, tier, duration)` where `recipient` can be any address including a contract. A third party could subscribe a contract address that cannot handle ERC721 tokens.
 
 **Proof of Concept**:
-1. Deploy `SupportToken`.
-2. Deploy a contract `Vault` that does not implement `IERC721Receiver`.
-3. Call `support(address(vault), 0, 1)` with sufficient ETH.
-4. Token is minted to `Vault` via `_mint`. No `onERC721Received` check occurs.
-5. The token is now permanently locked in `Vault` since it has no transfer function.
+1. Deploy a contract `Vault` that does not implement `IERC721Receiver`.
+2. Call `support(address(Vault), 0, 1)` with sufficient ETH.
+3. `_applySubscription` calls `_onNewSubscription`, which calls `_mint(Vault, tokenId)`.
+4. The mint succeeds, but the token is now stuck -- `Vault` has no way to transfer it.
 
 **Recommendation**: Replace `_mint` with `_safeMint`:
 ```solidity
@@ -37,239 +68,231 @@ function _onNewSubscription(address recipient, uint256 tokenId) internal overrid
     _safeMint(recipient, tokenId);
 }
 ```
-Note: If `_safeMint` is used, the `_update` override and any state changes before the mint in `_applySubscription` should be reviewed for reentrancy via the `onERC721Received` callback (see NFT-2).
+Note: This introduces a reentrancy vector via `onERC721Received` (see NFT-2). Evaluate whether the reentrancy risk or the stuck-token risk is more acceptable for your use case. Given the one-per-wallet constraint and the fact that `_applySubscription` writes state before `_onNewSubscription` is called, the reentrancy surface is limited but should still be analyzed.
 
 ---
 
-## [NFT-2] Reentrancy via excess ETH refund in `support()` after state changes
-
-**Severity**: Medium
-**Category**: evm-audit-erc721
-**Location**: `Support.support()` at `Support.sol:154-158`
-
-**Description**: The `support()` function performs an external call to refund excess ETH to `msg.sender` via `msg.sender.call{value: excess}("")` at line 156. This happens after all state changes (`_applySubscription`, `_notifyHook`, `_afterSubscriptionChange`) and after the `Supported` event is emitted. While the state is fully updated before the refund (following checks-effects-interactions pattern), this external call hands control to `msg.sender`, who could reenter `support()`.
-
-In the current implementation, reentrancy during the refund would simply create a second valid subscription (since state is already finalized). However, this could interact poorly with hook contracts. For example, the `MaxSlotsHook.onSubscribe()` function modifies state (`_tierHolders`, `_tierHolderIndex`) and a reentrant call could cause the hook to double-count or corrupt its holder array if the same address subscribes again before the first transaction completes.
-
-Additionally, if `_safeMint` were adopted (per NFT-1), the `onERC721Received` callback on the recipient would execute mid-transaction (inside `_applySubscription`), before the refund, before hook notification, and before the event -- creating a more dangerous reentrancy window where subscription state is partially applied.
-
-**Proof of Concept**:
-1. Deploy `SupportToken` with `MaxSlotsHook` attached.
-2. Create a malicious contract that implements `receive()` to call `support()` again.
-3. Call `support()` with excess ETH. After state is finalized, the refund triggers `receive()`.
-4. The reentrant `support()` call executes with the first call's state already committed.
-5. With `MaxSlotsHook`, the reentrant call could push the same subscriber twice into `_tierHolders` if timing aligns with index checks.
-
-**Recommendation**: Add a reentrancy guard (`nonReentrant` from OpenZeppelin's `ReentrancyGuard`) to the `support()` function:
-```solidity
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
-// Add to contract inheritance
-abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart, ReentrancyGuard {
-    ...
-    function support(...) external payable afterSaleStart nonReentrant {
-```
-
----
-
-## [NFT-3] `tokenURI` depends on external renderer contract -- untrusted renderer can DoS or return malicious data
-
-**Severity**: Low
-**Category**: evm-audit-erc721
-**Location**: `WithSupportTokens.tokenURI()` at `extensions/WithSupportTokens.sol:45-64`
-
-**Description**: The `tokenURI` function delegates entirely to an external `renderer` contract via `renderer.tokenURI(data)`. The renderer address is set by the owner via `setRenderer()` and there is no validation that the address implements `ISupportRenderer` or is a contract at all. If the renderer is set to a non-contract address, the call will succeed but return empty data. If the renderer is set to a malicious or buggy contract, it could:
-1. Revert on every call, making `tokenURI` always fail (DoS for metadata).
-2. Consume excessive gas.
-3. Return arbitrarily large data.
-
-Since `setRenderer` is `onlyOwner`, this is limited to owner misconfiguration or a compromised owner key. However, marketplaces and indexers that call `tokenURI` would be affected.
-
-**Proof of Concept**:
-1. Owner calls `setRenderer(address(0))`.
-2. Any call to `tokenURI(tokenId)` reverts because `address(0)` has no code.
-3. All NFT metadata becomes unavailable on marketplaces.
-
-**Recommendation**: Add a zero-address check and optionally an interface check in `setRenderer`:
-```solidity
-function setRenderer(address _renderer) external onlyOwner {
-    require(_renderer != address(0), "Invalid renderer");
-    renderer = ISupportRenderer(_renderer);
-    emit RendererUpdated(_renderer);
-}
-```
-
----
-
-## [NFT-4] SVG injection via owner-controlled `logo` string in `SupportRenderer._badge()`
-
-**Severity**: Low
-**Category**: evm-audit-erc721
-**Location**: `SupportRenderer._badge()` at `renderers/SupportRenderer.sol:48-68`
-
-**Description**: The `logo` string is embedded directly into the SVG output without any sanitization at line 65: `'<g transform="translate(3,3)">', logo, '</g>'`. The `logo` is set by the contract owner via `setLogo()`. While `projectName` is properly escaped using `LibString.escapeHTML()`, the `logo` field is not.
-
-A malicious or compromised owner could set `logo` to a string containing:
-- `</svg><script>...</script><svg>` -- injecting JavaScript into SVG (relevant for marketplace rendering)
-- Excessively large SVG content causing rendering issues
-- SVG elements that break out of the `<g>` container
-
-Since this is owner-controlled, the risk is limited to owner misbehavior. However, the inconsistency between sanitizing `projectName` but not `logo` suggests the `logo` field was overlooked.
-
-**Proof of Concept**:
-1. Owner calls `setLogo('</g></svg><script>alert("xss")</script><svg><g>')`.
-2. Any call to `tokenURI` returns an SVG with injected script tags.
-3. Marketplaces rendering this SVG inline could execute the script (most modern marketplaces sanitize, but not all).
-
-**Recommendation**: The `logo` is expected to be an SVG fragment (e.g., `<svg>...</svg>` or `<path .../>`) set by the trusted owner. If the trust model is acceptable, document it clearly. Otherwise, consider validating or sanitizing the logo content, or storing it as a pre-encoded base64 image reference instead of raw SVG.
-
----
-
-## [NFT-5] `ERC721Enumerable` gas cost scales with holder balance in `_update`, `_transferActiveToken`, and `_receiveActiveToken`
-
-**Severity**: Low
-**Category**: evm-audit-erc721
-**Location**: `WithSupportTokens._transferActiveToken()` at `extensions/WithSupportTokens.sol:103-116`, `_receiveActiveToken()` at lines 121-136, `_activeTokenOf()` at lines 148-163
-
-**Description**: Multiple functions iterate over all tokens owned by an address using `tokenOfOwnerByIndex()`:
-- `_transferActiveToken`: scans all tokens of `from` to find a replacement active token.
-- `_receiveActiveToken`: scans all tokens of `to` to check if any existing token is active.
-- `_activeTokenOf`: scans all tokens of `supporter` to find an active one.
-
-Combined with `ERC721Enumerable`'s own O(n) `_update` overhead for maintaining enumeration mappings, transfers become increasingly expensive as users accumulate tokens (which never burn). A user who has been re-subscribed many times (each creating a new token) will have a growing token balance, and every transfer or subscription resolution will iterate through all of them.
-
-Additionally, `MaxSlotsHook._isActiveOnTier()` calls `activeTokenOf()` which triggers this scan. `MaxSlotsHook.onSubscribe()` iterates all holders and calls `_isActiveOnTier()` for each -- creating O(holders * tokens_per_holder) complexity.
-
-**Proof of Concept**:
-1. Subscribe address `A` for 1 month, let it expire. Repeat 100 times. Address `A` now holds 100 expired tokens.
-2. Subscribe address `A` again (token 101). Call `support()` -- `_resolveSubscription` calls `_syncActiveToken` which calls `_activeTokenOf`, scanning all 101 tokens.
-3. Transfer token 101 from `A` to `B`. `_transferActiveToken` scans 101 tokens. `_receiveActiveToken` scans `B`'s tokens.
-4. Gas cost grows linearly with the number of historical (expired) tokens held.
-
-**Recommendation**: Consider limiting the iteration or maintaining an explicit pointer to the active token that avoids full scans. The `activeToken[address]` mapping already serves this purpose but is not consistently trusted -- `_activeTokenOf` falls through to a full scan when the cached pointer is stale. An alternative approach is to eagerly update the pointer on expiration or keep a bounded scan window.
-
----
-
-## [NFT-6] Tokens are never burned -- permanent state growth and stale NFT accumulation
-
+## [NFT-2] Reentrancy via `_mint` callback if upgraded to `_safeMint`
 **Severity**: Info
 **Category**: evm-audit-erc721
-**Location**: `WithSupportTokens.sol` (entire contract)
+**Location**: `_onNewSubscription()` at `WithSupportTokens.sol:92`, called from `_applySubscription()` at `Support.sol:306`
+**Description**: If `_mint` is changed to `_safeMint` (as recommended in NFT-1), the `onERC721Received` callback on the recipient would execute before the `support()` function completes. At the point `_onNewSubscription` is called (`Support.sol:306`), `_subscriptionIdCounter` is incremented and `_onNewSubscription` is called, but `subscription[recipient]`, `expiresAt[subId]`, and `tierHistory[subId]` are set afterwards at lines 309-319. The hook notification (`_notifyHook`) and event emission also happen after.
 
-**Description**: There is no mechanism to burn expired subscription tokens. Once minted, tokens exist forever even after the subscription they represent has expired. This means:
-1. `totalSupply()` only increases, never decreases, and does not reflect active subscriptions.
-2. Users accumulate expired tokens in their wallets, cluttering portfolio views and increasing gas costs for enumeration (see NFT-5).
-3. Expired tokens still have valid `tokenURI` (showing "EXPIRED" status) and remain transferable.
+The current code uses `_mint` (no callback), so this is not currently exploitable. This is a latent concern if the code is modified in the future.
 
-While this is a design choice (expired tokens serve as historical records), it has implications for protocols or integrations that use `totalSupply()` or `balanceOf()` to infer active participation.
+**Proof of Concept**: Not currently exploitable. If `_safeMint` were used:
+1. Attacker deploys a contract implementing `onERC721Received` that calls `support()` again.
+2. On first `support()` call, `_safeMint` triggers the callback.
+3. Inside the callback, the attacker's `subscription[attacker]` is still 0, `expiresAt` is still 0.
+4. The OnePerWallet check would prevent a second mint (balance already 1 after `_update`), so the re-entrant `support()` would not create a duplicate token. However, the subscription mapping state would be inconsistent during the callback.
 
-**Proof of Concept**: N/A -- this is a design observation.
-
-**Recommendation**: Consider adding an optional `burn(uint256 tokenId)` function that allows the token holder to destroy their expired tokens, or a batch cleanup mechanism. At minimum, document that `totalSupply()` includes expired tokens and should not be used to count active subscribers.
+**Recommendation**: If switching to `_safeMint`, consider applying OpenZeppelin's `ReentrancyGuard` to the `support()` and `grant()` functions, or ensure all state writes complete before `_onNewSubscription` is invoked. Alternatively, restructure `_applySubscription` so that subscription state is fully written before the mint call.
 
 ---
 
-## [NFT-7] Hook `onSubscribe` can revert and block subscriptions or transfers
-
+## [NFT-3] Transfer does not clear previous `subscription` mapping for the receiver if they had an expired subscription
 **Severity**: Medium
 **Category**: evm-audit-erc721
-**Location**: `WithSupportTokens._update()` at `extensions/WithSupportTokens.sol:87-96`, `Support._notifyHook()` at `Support.sol:273-279`
+**Location**: `_update()` at `WithSupportTokens.sol:66-87`
+**Description**: When a token is transferred to address `to`, the `_update` override sets `subscription[to] = tokenId` unconditionally (line 76). However, if `to` previously held a different subscription (now expired and their token was burned or transferred away), the old subscription ID is silently overwritten. This is actually the correct behavior for tracking the current token.
 
-**Description**: The hook's `onSubscribe()` and `onRelease()` calls are not wrapped in try/catch. A malicious or buggy hook contract can revert, which will:
+The real issue is more subtle: when `from` transfers their token to `to`, `subscription[from]` is set to 0 (line 75). If `from` later calls `support()` to re-subscribe, `_resolveSubscription` finds `subscription[from] == 0`, so `_applySubscription` creates a brand new subscription ID and mints a new token. This is the intended design.
 
-1. **Block all new subscriptions**: `support()` calls `_notifyHook()` which calls `h.onSubscribe()`. If the hook reverts, no one can subscribe.
-2. **Block all NFT transfers**: `_update()` calls `h.onRelease()` and `h.onSubscribe()` for active tokens. If the hook reverts, no transfer of active tokens is possible -- effectively freezing NFTs.
+However, the `subscription` mapping for the original `to` address now points to the transferred token. If `to` later lets the subscription expire and someone calls `support(to, ...)`, `_resolveSubscription` will return the old (expired) subscription ID. `_applySubscription` will then reuse this subscription ID but NOT mint a new token (because `subscriptionId != 0`). The token still exists and is owned by `to` (it was transferred to them), so this actually works correctly -- the subscription is reactivated on the existing token.
 
-While the hook is set by the owner (trusted), this creates a single point of failure. The `MaxSlotsHook.onSubscribe()` function can revert with `TierFull()` -- this is intentional for subscriptions but also blocks transfers of active tokens between users, which may not be intended.
+After detailed analysis, this flow is consistent. No issue.
+
+**Severity**: Reclassified to **Info**
+**Recommendation**: No action required. The subscription-to-token mapping is 1:1 and maintained correctly through transfers.
+
+---
+
+## [NFT-4] Token transfer to an address that already holds an expired token from a previous subscription is blocked by OnePerWallet
+**Severity**: Medium
+**Category**: evm-audit-erc721
+**Location**: `_update()` at `OnePerWallet.sol:29-45`, `WithSupportTokens.sol:66-87`
+**Description**: The `OnePerWallet` extension enforces that no address holds more than one token (`balanceOf(to) > 1` check at `OnePerWallet.sol:39`). Tokens in this system are never burned -- once minted, they persist even after the subscription expires. This means:
+
+1. Alice subscribes, receives token #1.
+2. Alice's subscription expires. She still holds token #1.
+3. Bob wants to transfer his active token #2 to Alice.
+4. The transfer reverts with `OneTokenPerWallet()` because Alice already holds token #1.
+
+Alice cannot receive any transferred subscription token unless she first transfers her own (expired) token away. Since there is no burn function, the only way to "clear" Alice's balance is to transfer her expired token to another address (e.g., a burn address).
+
+This is the intended behavior of OnePerWallet, but it creates friction: expired-token holders become "stuck" and cannot receive transferred subscriptions without first disposing of their expired token.
 
 **Proof of Concept**:
-1. Deploy `SupportToken` with `MaxSlotsHook` set to `maxSlots[0] = 1`.
-2. Address `A` subscribes to tier 0 (takes the single slot).
-3. Address `A` tries to transfer the active token to address `B`.
-4. In `_update()`, the hook's `onRelease(0, A)` removes `A` from the tier, then `onSubscribe(0, B)` is called.
-5. If the tier is already full due to another subscriber joining between the release and subscribe, the transfer reverts with `TierFull()`.
-6. Even without race conditions, the `onSubscribe` in `_update` calls `h.onSubscribe(tier, to)` only if `_hasActiveTierToken(to, tier)` is true -- but `_hasActiveTierToken` checks the token being transferred which is now owned by `to` (since `super._update` already moved it). This means the hook will try to add `to` as a tier holder, which could fail if slots are full.
+1. Alice calls `support(alice, 0, 1)` -- receives token #1.
+2. Time passes, subscription expires. Alice still owns token #1.
+3. Bob calls `support(bob, 0, 1)` -- receives token #2.
+4. Bob calls `transferFrom(bob, alice, 2)` -- reverts with `OneTokenPerWallet()`.
 
-**Recommendation**: Consider wrapping hook calls in `_update()` with try/catch so that hook failures do not freeze token transfers:
+**Recommendation**: Consider adding a `burn()` function (possibly only for expired tokens) so holders can clean up expired tokens before receiving a new one. Alternatively, document this as intended behavior: subscriptions are non-transferable to addresses that already hold a token.
+
+---
+
+## [NFT-5] Transferred token retains the original `startedAt` and `tierHistory` -- new owner inherits full history
+**Severity**: Low
+**Category**: evm-audit-erc721
+**Location**: `_update()` at `WithSupportTokens.sol:66-87`
+**Description**: When a token is transferred, the `_update` override only updates the `subscription` mapping (lines 75-76) and notifies the hook of the tier change (lines 78-84). It does NOT reset `startedAt[tokenId]`, `tierHistory[tokenId]`, or `expiresAt[tokenId]`. The new owner inherits the full subscription history, including the original start date and all tier period records.
+
+This means:
+- `tokenURI()` will display the original `startedAt` date, making the new owner appear to have been a supporter since the original subscription began.
+- The `_attributes` function in `SupportRenderer.sol:108` will include all historical tier periods from the original owner.
+- The "DAY N" counter in the SVG (`SupportRenderer.sol:54`) continues from the original start date.
+
+This is arguably by design (the token represents the subscription, not the supporter), but it could be misleading for social proof or loyalty tracking.
+
+**Proof of Concept**:
+1. Alice subscribes on Day 1 at Tier 0 for 12 months.
+2. On Day 30, Alice upgrades to Tier 1.
+3. On Day 60, Alice transfers the token to Bob.
+4. Bob's `tokenURI()` shows "DAY 61" with tier history showing Alice's Tier 0 and Tier 1 periods.
+
+**Recommendation**: If subscription history should belong to the owner rather than the token, reset `startedAt` and `tierHistory` on transfer. If the current behavior is intentional (token = portable subscription), document it clearly. Consider adding the original supporter address to the metadata so provenance is visible.
+
+---
+
+## [NFT-6] Excess ETH refund in `support()` is vulnerable to griefing via revert in recipient fallback
+**Severity**: Low
+**Category**: evm-audit-erc721
+**Location**: `support()` at `Support.sol:154-158`
+**Description**: After processing a subscription, excess ETH is refunded to `msg.sender` via a low-level call: `(bool sent, ) = msg.sender.call{value: excess}("")`. If `msg.sender` is a contract with a reverting `receive()` or `fallback()` function, and they deliberately overpay, the entire `support()` transaction reverts.
+
+This is primarily a self-griefing vector (the caller hurts themselves), but it could be used to grief third-party subscription flows. For example, if a meta-transaction relayer or a batching contract calls `support()` on behalf of users, a reverting refund would DoS the entire batch.
+
+**Proof of Concept**:
+1. Deploy a contract `Griefer` with `receive() external payable { revert(); }`.
+2. From `Griefer`, call `support{value: 1 ether}(someRecipient, 0, 1)` where the actual cost is 0.5 ETH.
+3. The refund of 0.5 ETH to `Griefer` reverts, causing the entire `support()` call to revert.
+
+**Recommendation**: Use a pull-based refund pattern (store excess and let the user withdraw), or use OpenZeppelin's `Address.sendValue` with a try/catch that skips the refund on failure. Alternatively, accept this as the caller's own problem since they control whether they overpay.
+
+---
+
+## [NFT-7] `tokenOf()` in OnePerWallet returns incorrect value for token ID 0
+**Severity**: Info
+**Category**: evm-audit-erc721
+**Location**: `tokenOf()` at `OnePerWallet.sol:20-25`
+**Description**: The `tokenOf` function stores `tokenId + 1` in `_ownedToken` to distinguish "holds token 0" from "holds no token" (since both would otherwise be 0). This means `_ownedToken[owner] == 0` means "no token" and `_ownedToken[owner] == 1` means "holds token 0".
+
+In this system, token IDs start at 1 (from `++_subscriptionIdCounter`), so token ID 0 is never minted. This off-by-one encoding is therefore safe in practice. However, if the system were ever modified to mint token ID 0, the `tokenOf` function would work correctly (returning 0 when `_ownedToken[owner] == 1`).
+
+**Proof of Concept**: Not exploitable in current system since token IDs start at 1.
+
+**Recommendation**: No action required. The `tokenOf` encoding is correct and the system never mints token ID 0. This is purely informational.
+
+---
+
+## [NFT-8] `_update()` override chain: `WithSupportTokens` calls `super._update()` which resolves to `OnePerWallet._update()`, not `ERC721._update()`
+**Severity**: Info
+**Category**: evm-audit-erc721
+**Location**: `_update()` at `WithSupportTokens.sol:66-67`
+**Description**: The MRO (Method Resolution Order) for `WithSupportTokens` is: `WithSupportTokens -> OnePerWallet -> ERC721`. When `WithSupportTokens._update()` calls `super._update(to, tokenId, auth)` at line 67, it dispatches to `OnePerWallet._update()`, which in turn calls `super._update()` to reach `ERC721._update()`.
+
+This means the one-per-wallet check in `OnePerWallet._update()` executes BEFORE the subscription mapping updates in `WithSupportTokens._update()`. The order is:
+1. `ERC721._update()` -- actual token transfer, balance updates
+2. `OnePerWallet._update()` -- clears old owner tracking, checks `balanceOf(to) > 1`, sets new owner tracking
+3. `WithSupportTokens._update()` -- updates `subscription` mapping, notifies hooks
+
+This ordering is correct. The subscription state is updated after the token transfer succeeds and ownership constraints are validated.
+
+**Proof of Concept**: Not an issue -- this is informational about the call chain.
+
+**Recommendation**: No action required. Document the MRO dependency in a code comment for future maintainers, since reordering the inheritance could break the invariant.
+
+---
+
+## [NFT-9] Hook calls in `_update()` are not protected by the same guard as `_notifyHook()` in `support()`
+**Severity**: Low
+**Category**: evm-audit-erc721
+**Location**: `_update()` at `WithSupportTokens.sol:78-84`
+**Description**: In `Support.sol:268-274`, the `_notifyHook` function checks `previousTier != NO_TIER && previousTier != tier` before calling `h.onRelease()`, and always calls `h.onSubscribe()`. However, in `WithSupportTokens._update()` (lines 78-84), the transfer hook notification calls `h.onRelease(tier, from)` and `h.onSubscribe(tier, to)` unconditionally (as long as the subscription was active), with the same tier for both calls.
+
+This means on transfer, the hook receives `onRelease(tier, from)` followed by `onSubscribe(tier, to)` for the same tier. In `MaxSlotsHook`, this means:
+- `onRelease` removes `from` from the tier holder list.
+- `onSubscribe` adds `to` to the tier holder list.
+
+This is correct behavior for a transfer. The MaxSlotsHook properly handles this case.
+
+However, a subtle issue exists: the hook calls are made via external calls to a potentially malicious or buggy hook contract. If `h.onRelease()` reverts, the entire transfer reverts, meaning the hook can block token transfers. The owner can set any hook via `setHook()`.
+
+**Proof of Concept**:
+1. Owner sets a hook that reverts on `onRelease()` for a specific tier or address.
+2. Any user holding an active subscription token at that tier cannot transfer their token -- all `transferFrom` / `safeTransferFrom` calls revert.
+3. The user's token is effectively frozen until the owner changes the hook.
+
+**Recommendation**: This is an owner-trust issue. The owner can already rug in several ways (set malicious renderer, set malicious hook, etc.). If reducing owner trust is desired, consider wrapping hook calls in a try/catch so that hook failures do not block transfers:
 ```solidity
-if (address(h) != address(0)) {
-    if (!_hasActiveTierToken(from, tier)) {
+if (wasActive) {
+    ISubscriptionHook h = hook;
+    if (address(h) != address(0)) {
         try h.onRelease(tier, from) {} catch {}
-    }
-    if (_hasActiveTierToken(to, tier)) {
         try h.onSubscribe(tier, to) {} catch {}
     }
 }
 ```
-Alternatively, document that hook contracts must never revert unexpectedly and that `MaxSlotsHook` intentionally blocks transfers when tiers are full.
 
 ---
 
-## [NFT-8] `_update` hook notification logic has inconsistent tier tracking on transfer
-
-**Severity**: Low
-**Category**: evm-audit-erc721
-**Location**: `WithSupportTokens._update()` at `extensions/WithSupportTokens.sol:75-100`
-
-**Description**: In `_update()`, when a token is transferred, the code calls `_hasActiveTierToken(to, tier)` at line 93 to decide whether to notify the hook about the new holder. However, by this point, `super._update(to, tokenId, auth)` has already executed (line 76), which means the ERC721Enumerable state has already moved the token to `to`. So `_hasActiveTierToken(to, tier)` will find the just-transferred token in `to`'s balance, meaning `h.onSubscribe(tier, to)` is always called for active token transfers -- even if `to` already had another active token of the same tier.
-
-Conversely, `_hasActiveTierToken(from, tier)` at line 90 checks after the token has been removed from `from`, so `h.onRelease(tier, from)` is correctly only called when `from` has no remaining active tokens of that tier.
-
-The asymmetry means: if `to` already holds an active tier-X token and receives another tier-X token via transfer, `onSubscribe(tier, to)` will be called again. For `MaxSlotsHook`, this is handled (the index check returns early if the subscriber is already registered), but other hook implementations might double-count.
-
-**Proof of Concept**:
-1. Address `B` has an active tier-0 token (token 1).
-2. Address `A` transfers their active tier-0 token (token 2) to `B`.
-3. In `_update()`, `_hasActiveTierToken(B, 0)` returns true (because `B` now holds both token 1 and token 2).
-4. `h.onSubscribe(0, B)` is called even though `B` was already subscribed to tier 0.
-5. `MaxSlotsHook.onSubscribe` returns early due to the index check, but a custom hook without this guard could corrupt state.
-
-**Recommendation**: Check whether `to` already had an active token of the given tier *before* the transfer, or document that hook `onSubscribe` implementations must be idempotent for the same `(tier, subscriber)` pair.
-
----
-
-## [NFT-9] `activeToken` mapping can become stale for the receiver on transfer, breaking subscription resolution
-
-**Severity**: Medium
-**Category**: evm-audit-erc721
-**Location**: `WithSupportTokens._receiveActiveToken()` at `extensions/WithSupportTokens.sol:121-136`
-
-**Description**: When a token is transferred to address `to`, `_receiveActiveToken` only assigns the incoming token as `activeToken[to]` if `to` has no existing active token. The check at line 124-125 is:
-```solidity
-uint256 existing = activeToken[to];
-if (existing != 0 && block.timestamp < expiresAt[existing]) return;
-```
-
-However, `activeToken[to]` could be pointing to a token that `to` no longer owns (it was transferred away in a previous transaction), but which hasn't expired. In this case, `_receiveActiveToken` would see a non-zero, non-expired `existing` and return early -- failing to set the incoming token as active. This means `to` could have their `activeToken` pointing to a token they don't own.
-
-When `_resolveSubscription` is later called for `to`, it calls `_syncActiveToken` -> `_activeTokenOf`, which does a full scan and would find the correct token. But between the transfer and the next subscription action, `activeToken[to]` is stale and `activeTokenOf(to)` (the public view function which calls `_activeTokenOf`) would still return the correct value due to the scan fallback. The stale pointer is corrected lazily.
-
-The issue is that external contracts reading `activeToken[to]` directly (the public mapping) would get incorrect data. `MaxSlotsHook._isActiveOnTier()` calls `activeTokenOf()` (the view function with the scan), so it is not affected. But any integration reading the raw `activeToken` mapping would be misled.
-
-**Proof of Concept**:
-1. Address `A` has active token 1 (tier 0). `activeToken[A] = 1`.
-2. `A` transfers token 1 to `B`. `_transferActiveToken(A, 1)` sets `activeToken[A] = 0`. `_receiveActiveToken(B, 1)` sets `activeToken[B] = 1`.
-3. `B` transfers token 1 to `C`. `_transferActiveToken(B, 1)` sets `activeToken[B] = 0`. `_receiveActiveToken(C, 1)` sets `activeToken[C] = 1`.
-4. `C` transfers token 1 back to `B`. `_receiveActiveToken(B, 1)` checks: `activeToken[B] == 0`, so it proceeds to scan and assigns `activeToken[B] = 1`. This works correctly.
-5. Now consider: `B` has token 1 (active) and token 2 (active). `activeToken[B] = 1`. `B` transfers token 1 to `C`. `_transferActiveToken(B, 1)` scans and finds token 2, sets `activeToken[B] = 2`. Correct.
-6. But: `B` has token 1 (active). `activeToken[B] = 1`. `B` receives token 2 (active) from `D`. `_receiveActiveToken(B, 2)`: `existing = activeToken[B] = 1`, and `expiresAt[1]` is in the future, so it returns early. `activeToken[B]` remains `1`. This is correct since `B` still owns token 1.
-
-After deeper analysis, the lazy-sync pattern works correctly through `_activeTokenOf` for all contract interactions. The risk is limited to off-chain readers of the raw `activeToken` mapping getting stale data, which is an informational concern.
-
-**Revised Severity**: Low
-
-**Recommendation**: Document that `activeToken` is a cached pointer and external consumers should use `activeTokenOf()` instead of reading the mapping directly.
-
----
-
-## [NFT-10] No `from` parameter validation in `transferFrom` -- relies on OpenZeppelin's internal checks
-
+## [NFT-10] `tokenURI()` reverts for tokens with no tier history (should be unreachable)
 **Severity**: Info
 **Category**: evm-audit-erc721
-**Location**: `WithSupportTokens.sol` (inherited ERC721)
+**Location**: `tokenURI()` at `WithSupportTokens.sol:40-59`, `_lastTier()` at `Support.sol:331-334`
+**Description**: If `currentTier()` returns `active = false`, `tokenURI()` calls `_lastTier(tokenId)` at line 44. `_lastTier` accesses `periods[periods.length - 1]`, which would revert with an array-out-of-bounds error if `tierHistory[tokenId]` is empty.
 
-**Description**: The contracts inherit OpenZeppelin's ERC721 which correctly validates that `from` is the actual owner in `transferFrom(from, to, tokenId)`. The checklist item "Most `from` parameters should be `msg.sender`" does not apply here because the contract does not expose any custom transfer function with a user-supplied `from` parameter -- it relies entirely on the standard ERC721 `transferFrom` which is secure. This is informational confirmation that this checklist item is satisfied.
+In practice, this is unreachable because `_applySubscription()` always pushes at least one `TierPeriod` when creating or reactivating a subscription (lines 313 or 315). A token cannot exist without at least one tier period entry.
 
-**Proof of Concept**: N/A.
+However, if `tierHistory[tokenId]` were somehow cleared (e.g., via a future code change or storage collision), `tokenURI()` would revert for that token, making it invisible to marketplaces and wallets.
 
-**Recommendation**: No action needed.
+**Proof of Concept**: Not triggerable with current code. Would require a code change that clears `tierHistory` without re-populating it.
+
+**Recommendation**: Add a defensive check in `tokenURI()`:
+```solidity
+uint8 displayTier = active ? tier : (tierHistory[tokenId].length > 0 ? _lastTier(tokenId) : 0);
+```
+
+---
+
+## [NFT-11] SupportRenderer `_buildSVG` can underflow if `block.timestamp < data.startedAt`
+**Severity**: Low
+**Category**: evm-audit-erc721
+**Location**: `_buildSVG()` at `SupportRenderer.sol:54`
+**Description**: The day number calculation `(block.timestamp - data.startedAt) / 1 days + 1` at line 54 performs an unchecked subtraction. If `block.timestamp < data.startedAt` (which can happen when a subscription is granted with a future `startAt` via the `grant()` function at `Support.sol:162`), this subtraction underflows, causing a revert (Solidity 0.8.x checked arithmetic).
+
+The `grant()` function allows the owner to set `startAt` to any `uint64` value, including timestamps in the future. If a token is granted with a future start date and someone calls `tokenURI()` before that date, the call reverts.
+
+**Proof of Concept**:
+1. Owner calls `grant(recipient, 0, 12, futureTimestamp)` where `futureTimestamp = block.timestamp + 30 days`.
+2. Token is minted with `startedAt[tokenId] = futureTimestamp`.
+3. Before `futureTimestamp`, anyone calling `tokenURI(tokenId)` gets a revert due to arithmetic underflow in `SupportRenderer._buildSVG()`.
+
+**Recommendation**: Add a guard in `_buildSVG`:
+```solidity
+uint256 dayNum = block.timestamp > data.startedAt
+    ? (block.timestamp - data.startedAt) / 1 days + 1
+    : 0;
+```
+Or prevent `grant()` from setting a future `startAt` that would cause rendering issues.
+
+---
+
+## Summary
+
+| ID | Title | Severity |
+|----|-------|----------|
+| NFT-1 | `_mint` used instead of `_safeMint` | Low |
+| NFT-2 | Reentrancy via `_mint` callback if upgraded to `_safeMint` | Info |
+| NFT-3 | Transfer subscription mapping analysis | Info |
+| NFT-4 | OnePerWallet blocks transfers to expired-token holders | Medium |
+| NFT-5 | Transferred token retains original history | Low |
+| NFT-6 | Excess ETH refund griefing via reverting fallback | Low |
+| NFT-7 | `tokenOf()` off-by-one encoding for token ID 0 | Info |
+| NFT-8 | `_update()` override chain MRO documentation | Info |
+| NFT-9 | Hook can block token transfers | Low |
+| NFT-10 | `tokenURI()` reverts if tier history is empty | Info |
+| NFT-11 | Renderer underflow on future-dated subscriptions | Low |
+
+**Critical**: 0 | **High**: 0 | **Medium**: 1 | **Low**: 5 | **Info**: 5
