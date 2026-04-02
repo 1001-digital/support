@@ -18,6 +18,8 @@ contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
         uint16 width;
     }
 
+    uint16 internal constant SVG_WIDTH = 400;
+
     error InvalidBadgeWidth();
 
     event TierBadgeUpdated(uint8 indexed tier);
@@ -28,7 +30,7 @@ contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
 
     /// @notice Set the visual badge metadata for a tier.
     function setTierBadge(uint8 tier, string calldata name, string calldata bg, string calldata tc, uint16 width) external onlyOwner {
-        if (width == 0 || width > 400) revert InvalidBadgeWidth();
+        if (width == 0 || width > SVG_WIDTH) revert InvalidBadgeWidth();
         _tierBadges[tier] = TierBadge(name, bg, tc, width);
         emit TierBadgeUpdated(tier);
     }
@@ -89,7 +91,7 @@ contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
             w = 90;
         }
 
-        uint256 x = (400 - w) / 2;
+        uint256 x = (SVG_WIDTH - w) / 2;
         uint256 textX = 26 + (w - 26) / 2;
 
         return string.concat(
