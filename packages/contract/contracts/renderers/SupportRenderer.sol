@@ -59,7 +59,7 @@ contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
         return string.concat(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">'
             '<rect width="400" height="400" fill="white"/>'
-            '<style>.l{font-family:monospace;fill:#666;text-transform:uppercase;font-size:10px;font-weight:500}</style>'
+            '<style>.l{font-family:monospace;fill:#8B8F9A;text-transform:uppercase;font-size:10px;font-weight:700}</style>'
             '<text class="l" x="20" y="30">', safeName, ' SUPPORTERS</text>'
             '<text class="l" x="380" y="30" text-anchor="end">', _displayName(data.supporter), '</text>',
             _badge(data.displayTier, data.logo),
