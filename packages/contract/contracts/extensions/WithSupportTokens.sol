@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {ERC721} from "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import {ERC721Enumerable} from "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
 import {Support} from "../Support.sol";
-import {ISupportRenderer, Segment} from "../interfaces/ISupportRenderer.sol";
+import {ISupportRenderer, TierPeriod} from "../interfaces/ISupportRenderer.sol";
 import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 /// @title WithSupportTokens
@@ -57,7 +57,7 @@ abstract contract WithSupportTokens is Support, ERC721Enumerable {
             expiresAt: expiresAt[tokenId],
             displayTier: displayTier,
             active: active,
-            segments: _segments[tokenId]
+            tierPeriods: _tierPeriods[tokenId]
         });
 
         return renderer.tokenURI(data);

@@ -20,6 +20,12 @@ const tierPrices: readonly [bigint, bigint, bigint, bigint] = [
 const discountMinMonths = 12
 const discountPercentOff = 20
 
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+
+async function readCost(support: any, args: [number, number]): Promise<bigint> {
+  return (await support.read.estimate([...args, ZERO_ADDRESS]))[0]
+}
+
 describe('Support', async function () {
   async function deploy() {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
@@ -49,28 +55,28 @@ describe('Support', async function () {
 
   it('Should calculate base cost', async function () {
     const { support, hook } = await deploy()
-    assert.equal(await support.read.cost([0, 1]), parseEther('0.0025'))
-    assert.equal(await support.read.cost([3, 1]), parseEther('0.025'))
+    assert.equal(await readCost(support, [0, 1]), parseEther('0.0025'))
+    assert.equal(await readCost(support, [3, 1]), parseEther('0.025'))
   })
 
   it('Should apply discount at 12+ months', async function () {
     const { support, discountHook } = await deploy()
     await support.write.setHook([discountHook.address])
     // $5 * 12 = $60, 20% off = $48 / $2000 = 0.024 ETH
-    assert.equal(await support.read.cost([0, 12]), parseEther('0.024'))
+    assert.equal(await readCost(support, [0, 12]), parseEther('0.024'))
   })
 
   it('Should revert cost for invalid inputs', async function () {
     const { support, hook } = await deploy()
-    await assert.rejects(support.read.cost([4, 1]), /InvalidTier/)
-    await assert.rejects(support.read.cost([0, 0]), /InvalidDuration/)
+    await assert.rejects(readCost(support, [4, 1]), /InvalidTier/)
+    await assert.rejects(readCost(support, [0, 0]), /InvalidDuration/)
   })
 
   // --- New subscription ---
 
   it('Should mint NFT on first support', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
@@ -86,7 +92,7 @@ describe('Support', async function () {
       1n,
     )
 
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 1)
     assert.equal(segs[0].tier, 0)
   })
@@ -95,7 +101,7 @@ describe('Support', async function () {
 
   it('Should extend same tier without new segment', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
@@ -109,7 +115,7 @@ describe('Support', async function () {
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n)
 
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 1) // no new segment
   })
 
@@ -120,7 +126,7 @@ describe('Support', async function () {
 
     // Subscribe tier 0 ($5/mo) for 2 months
     await support.write.support([walletClient.account.address, 0, 2], {
-      value: await support.read.cost([0, 2]),
+      value: await readCost(support, [0, 2]),
     })
 
     // Advance 1 month — ~1 month remaining at tier 0
@@ -173,7 +179,7 @@ describe('Support', async function () {
     assert.equal(active, true)
 
     // Two segments: tier 0, then tier 2
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 2)
     assert.equal(segs[0].tier, 0)
     assert.equal(segs[1].tier, 2)
@@ -183,7 +189,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 2], {
-      value: await support.read.cost([0, 2]),
+      value: await readCost(support, [0, 2]),
     })
 
     // Upgrade to tier 2 with duration 0 — free, remaining time converts
@@ -209,7 +215,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
     })
     const expiryBefore = await support.read.expiresAt([1n])
 
@@ -238,7 +244,7 @@ describe('Support', async function () {
   it('Should revert duration 0 for same-tier extension', async function () {
     const { support, hook } = await deploy()
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     await assert.rejects(
@@ -256,7 +262,7 @@ describe('Support', async function () {
 
     // Subscribe tier 2 ($25/mo) for 1 month
     await support.write.support([walletClient.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
     })
 
     // Advance 15 days — ~15 days remaining at tier 2
@@ -275,7 +281,7 @@ describe('Support', async function () {
     // Remaining ~15 days at $25 converts to ~75 days at $5 (5x)
     // Plus 30 days new = ~105 days total from now
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     const expiryAfter = await support.read.expiresAt([1n])
@@ -290,7 +296,7 @@ describe('Support', async function () {
     const [tier] = await support.read.currentTier([1n])
     assert.equal(tier, 0)
 
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 2)
   })
 
@@ -301,7 +307,7 @@ describe('Support', async function () {
 
     // Subscribe tier 2 for 1 month
     await support.write.support([walletClient.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
     })
 
     const expiryBefore = await support.read.expiresAt([1n])
@@ -322,7 +328,7 @@ describe('Support', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     await publicClient.request({
@@ -333,7 +339,7 @@ describe('Support', async function () {
     await priceFeed.write.setPrice([ETH_USD])
 
     await support.write.support([walletClient.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
     })
 
     assert.equal(await support.read.totalSupply(), 2n)
@@ -357,7 +363,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     await publicClient.request({
@@ -374,7 +380,7 @@ describe('Support', async function () {
 
   it('Should refund excess and emit correct paid', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
     const overpay = ethCost + parseEther('0.5')
 
     const balanceBefore = await publicClient.getBalance({
@@ -409,11 +415,11 @@ describe('Support', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     await priceFeed.write.setPrice([0n])
-    await assert.rejects(support.read.cost([0, 1]), /StalePrice/)
+    await assert.rejects(readCost(support, [0, 1]), /StalePrice/)
 
     await priceFeed.write.setPrice([ETH_USD])
     await priceFeed.write.setAnsweredInRound([0])
-    await assert.rejects(support.read.cost([0, 1]), /StalePrice/)
+    await assert.rejects(readCost(support, [0, 1]), /StalePrice/)
   })
 
   // --- Owner ---
@@ -436,7 +442,7 @@ describe('Support', async function () {
 
   it('Should allow withdraw', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
     })
@@ -502,7 +508,7 @@ describe('Support', async function () {
 
   it('Should emit Transfer on mint, not on extension', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
 
     const hash1 = await support.write.support(
       [walletClient.account.address, 0, 1],
@@ -536,7 +542,7 @@ describe('Support', async function () {
   it('Should transfer NFT and subscription', async function () {
     const { support, hook } = await deploy()
     await support.write.support([walletClient.account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
     })
 
     await support.write.transferFrom([
@@ -576,7 +582,7 @@ describe('Support', async function () {
   it('Should allow approved transfer', async function () {
     const { support, hook } = await deploy()
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     await support.write.approve([otherWallet.account.address, 1n])
@@ -596,10 +602,10 @@ describe('Support', async function () {
 
     // Both wallets subscribe
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     await support.write.support([otherWallet.account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
       account: otherWallet.account,
     })
 
@@ -631,7 +637,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     // otherWallet has no subscription
@@ -657,7 +663,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     // Fast-forward past expiry
@@ -690,7 +696,7 @@ describe('Support', async function () {
 
     // Alice subscribes (token 1)
     await support.write.support([walletClient.account.address, 0, 3], {
-      value: await support.read.cost([0, 3]),
+      value: await readCost(support, [0, 3]),
     })
     assert.equal(
       await support.read.activeToken([walletClient.account.address]),
@@ -699,7 +705,7 @@ describe('Support', async function () {
 
     // Bob subscribes (token 2) and transfers it to Alice
     await support.write.support([otherWallet.account.address, 1, 3], {
-      value: await support.read.cost([1, 3]),
+      value: await readCost(support, [1, 3]),
       account: otherWallet.account,
     })
     await support.write.transferFrom(
@@ -730,7 +736,7 @@ describe('Support', async function () {
 
     // Next support() call should extend token 2, not create token 3
     await support.write.support([walletClient.account.address, 1, 1], {
-      value: await support.read.cost([1, 1]),
+      value: await readCost(support, [1, 1]),
     })
     assert.equal(await support.read.totalSupply(), 2n)
     assert.equal(
@@ -742,7 +748,7 @@ describe('Support', async function () {
   it('Should revert unauthorized transfer', async function () {
     const { support, hook } = await deploy()
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     await assert.rejects(
@@ -768,7 +774,7 @@ describe('Support', async function () {
   it('Should build active tokenURI with project name and badge', async function () {
     const { support, hook } = await deploy()
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     const uri = await support.read.tokenURI([1n])
@@ -797,7 +803,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     await support.write.support([walletClient.account.address, 2, 1], {
       value: parseEther('1'),
@@ -823,8 +829,8 @@ describe('Support', async function () {
       json.attributes.find((a: any) => a.trait_type === 'Tier').value,
       2,
     )
-    assert.ok(json.attributes.find((a: any) => a.trait_type === 'Segment 1'))
-    assert.ok(json.attributes.find((a: any) => a.trait_type === 'Segment 2'))
+    assert.ok(json.attributes.find((a: any) => a.trait_type === 'Tier Period 1'))
+    assert.ok(json.attributes.find((a: any) => a.trait_type === 'Tier Period 2'))
   })
 
   // --- Tier slot limits ---
@@ -835,7 +841,7 @@ describe('Support', async function () {
 
     await hook.write.setMaxSlots([3, 1])
 
-    const cost3 = await support.read.cost([3, 1])
+    const cost3 = await readCost(support, [3, 1])
     await support.write.support([wallets[0].account.address, 3, 1], {
       value: cost3,
       account: wallets[0].account,
@@ -870,7 +876,7 @@ describe('Support', async function () {
 
     await hook.write.setMaxSlots([3, 1])
     await support.write.support([wallets[0].account.address, 3, 1], {
-      value: await support.read.cost([3, 1]),
+      value: await readCost(support, [3, 1]),
       account: wallets[0].account,
     })
 
@@ -882,7 +888,7 @@ describe('Support', async function () {
     await priceFeed.write.setPrice([ETH_USD])
 
     await support.write.support([wallets[1].account.address, 3, 1], {
-      value: await support.read.cost([3, 1]),
+      value: await readCost(support, [3, 1]),
       account: wallets[1].account,
     })
     const holders = await hook.read.tierHolders([3])
@@ -896,7 +902,7 @@ describe('Support', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     await hook.write.setMaxSlots([3, 3])
-    const cost3 = await support.read.cost([3, 1])
+    const cost3 = await readCost(support, [3, 1])
 
     // Three holders subscribe to tier 3
     await support.write.support([wallets[0].account.address, 3, 1], {
@@ -908,7 +914,7 @@ describe('Support', async function () {
       account: wallets[1].account,
     })
     await support.write.support([wallets[2].account.address, 3, 2], {
-      value: await support.read.cost([3, 2]),
+      value: await readCost(support, [3, 2]),
       account: wallets[2].account,
     })
 
@@ -939,7 +945,7 @@ describe('Support', async function () {
     await hook.write.setMaxSlots([3, 2])
 
     // Two holders in tier 3
-    const cost3 = await support.read.cost([3, 2])
+    const cost3 = await readCost(support, [3, 2])
     await support.write.support([wallets[0].account.address, 3, 2], {
       value: cost3,
       account: wallets[0].account,
@@ -973,7 +979,7 @@ describe('Support', async function () {
 
     // maxSlots defaults to 0 (unlimited / no tracking)
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
 
     const active = await hook.read.activeTierHolders([0])
@@ -987,7 +993,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([3, 3])
-    const cost3 = await support.read.cost([3, 2])
+    const cost3 = await readCost(support, [3, 2])
 
     // Fill 3 slots: [w0, w1, w2]
     await support.write.support([wallets[0].account.address, 3, 2], {
@@ -1027,8 +1033,8 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([3, 2])
-    const cost3 = await support.read.cost([3, 2])
-    const cost3Single = await support.read.cost([3, 1])
+    const cost3 = await readCost(support, [3, 2])
+    const cost3Single = await readCost(support, [3, 1])
 
     // Fill both slots
     await support.write.support([wallets[0].account.address, 3, 2], {
@@ -1058,7 +1064,7 @@ describe('Support', async function () {
 
     // w2 can now join
     await support.write.support([wallets[2].account.address, 3, 1], {
-      value: await support.read.cost([3, 1]),
+      value: await readCost(support, [3, 1]),
       account: wallets[2].account,
     })
     const holders = await hook.read.tierHolders([3])
@@ -1071,7 +1077,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([0, 2])
-    const cost0 = await support.read.cost([0, 1])
+    const cost0 = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost0,
@@ -1099,7 +1105,7 @@ describe('Support', async function () {
 
     // Subscribe to tier 3
     await support.write.support([wallets[0].account.address, 3, 1], {
-      value: await support.read.cost([3, 1]),
+      value: await readCost(support, [3, 1]),
       account: wallets[0].account,
     })
     assert.equal((await hook.read.tierHolders([3])).length, 1)
@@ -1114,7 +1120,7 @@ describe('Support', async function () {
 
     // Re-subscribe to tier 0
     await support.write.support([wallets[0].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
       account: wallets[0].account,
     })
 
@@ -1132,7 +1138,7 @@ describe('Support', async function () {
     await hook.write.setMaxSlots([3, 2])
 
     await support.write.support([wallets[0].account.address, 3, 1], {
-      value: await support.read.cost([3, 1]),
+      value: await readCost(support, [3, 1]),
       account: wallets[0].account,
     })
     assert.equal((await hook.read.tierHolders([3])).length, 1)
@@ -1147,7 +1153,7 @@ describe('Support', async function () {
 
     // Re-subscribe to same tier
     await support.write.support([wallets[0].account.address, 3, 1], {
-      value: await support.read.cost([3, 1]),
+      value: await readCost(support, [3, 1]),
       account: wallets[0].account,
     })
 
@@ -1171,7 +1177,7 @@ describe('Support', async function () {
 
   it('Should emit MetadataUpdate on every call', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
     })
@@ -1194,10 +1200,10 @@ describe('Support', async function () {
   it('Should track multiple subscribers independently', async function () {
     const { support, hook } = await deploy()
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     await support.write.support([otherWallet.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
       account: otherWallet.account,
     })
 
@@ -1272,7 +1278,7 @@ describe('Support', async function () {
     ])
     assert.equal(await support.read.startedAt([tokenId]), futureStart)
 
-    const segs = await support.read.segments([tokenId])
+    const segs = await support.read.tierPeriods([tokenId])
     assert.equal(segs[0].startedAt, futureStart)
 
     // Expiry is based on future start + 3 months
@@ -1320,7 +1326,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([2, 1])
-    const cost2 = await support.read.cost([2, 1])
+    const cost2 = await readCost(support, [2, 1])
 
     // Fill the slot
     await support.write.support([walletClient.account.address, 2, 1], {
@@ -1391,7 +1397,7 @@ describe('Support', async function () {
 
   it('Should allow gifting a subscription to another address', async function () {
     const { support, hook } = await deploy()
-    const ethCost = await support.read.cost([2, 3])
+    const ethCost = await readCost(support, [2, 3])
 
     // walletClient pays, otherWallet receives
     await support.write.support([otherWallet.account.address, 2, 3], {
@@ -1427,7 +1433,7 @@ describe('Support', async function () {
 
     // wallets[2] subscribes at tier 0
     await support.write.support([wallets[2].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
       account: wallets[2].account,
     })
 
@@ -1442,7 +1448,7 @@ describe('Support', async function () {
 
     // Third party extending at same tier is OK
     await support.write.support([wallets[2].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
       account: wallets[3].account,
     })
   })
@@ -1451,7 +1457,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([otherWallet.account.address, 0, 2], {
-      value: await support.read.cost([0, 2]),
+      value: await readCost(support, [0, 2]),
       account: otherWallet.account,
     })
 
@@ -1471,7 +1477,7 @@ describe('Support', async function () {
       support.write.support(
         ['0x0000000000000000000000000000000000000000', 0, 1],
         {
-          value: await support.read.cost([0, 1]),
+          value: await readCost(support, [0, 1]),
         },
       ),
       /InvalidRecipient/,
@@ -1563,7 +1569,7 @@ describe('Support', async function () {
     await publicClient.request({ method: 'evm_mine' as any, params: [] })
     await priceFeed.write.setPrice([ETH_USD])
 
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
     })
@@ -1627,14 +1633,14 @@ describe('Support', async function () {
 
     // Other wallet self-subscribes
     await support.write.support([otherWallet.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
       account: otherWallet.account,
     })
     const firstExpiry = await support.read.expiresAt([1n])
 
     // walletClient gifts an extension
     await support.write.support([otherWallet.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     const secondExpiry = await support.read.expiresAt([1n])
 
@@ -1650,7 +1656,7 @@ describe('Support', async function () {
       support.address,
     ])
 
-    const ethCost = await support.read.cost([0, 1])
+    const ethCost = await readCost(support, [0, 1])
 
     // Fund attacker with enough ETH to cover cost + re-entrant extension
     await walletClient.sendTransaction({
@@ -1667,7 +1673,7 @@ describe('Support', async function () {
     const expires = await support.read.expiresAt([tokenId])
     assert.ok(expires > started)
 
-    const segs = await support.read.segments([tokenId])
+    const segs = await support.read.tierPeriods([tokenId])
     assert.equal(segs.length, 1)
     assert.equal(segs[0].tier, 0)
   })
@@ -1737,7 +1743,7 @@ describe('Support', async function () {
       await support.write.grant([walletClient.account.address, tier, 1, 0n])
     }
 
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 8)
     assert.equal(segs[0].tier, 0)
     assert.equal(segs[7].tier, 3)
@@ -1745,7 +1751,7 @@ describe('Support', async function () {
     // tokenURI should render all 8 segments without reverting
     const uri = await support.read.tokenURI([1n])
     const json = JSON.parse(Buffer.from(uri.split(',')[1], 'base64').toString())
-    assert.ok(json.attributes.find((a: any) => a.trait_type === 'Segment 8'))
+    assert.ok(json.attributes.find((a: any) => a.trait_type === 'Tier Period 8'))
     assert.equal(
       json.attributes.find((a: any) => a.trait_type === 'Tier').value,
       3,
@@ -1759,8 +1765,8 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([0, 3])
-    const cost0 = await support.read.cost([0, 2])
-    const cost0Single = await support.read.cost([0, 1])
+    const cost0 = await readCost(support, [0, 2])
+    const cost0Single = await readCost(support, [0, 1])
 
     await support.write.support([wallets[0].account.address, 0, 2], {
       value: cost0,
@@ -1798,7 +1804,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([1, 1])
-    const cost1 = await support.read.cost([1, 1])
+    const cost1 = await readCost(support, [1, 1])
 
     await support.write.support([wallets[0].account.address, 1, 1], {
       value: cost1,
@@ -1828,7 +1834,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 2, 2], {
-      value: await support.read.cost([2, 2]),
+      value: await readCost(support, [2, 2]),
     })
     assert.equal(
       await support.read.activeToken([walletClient.account.address]),
@@ -1852,7 +1858,7 @@ describe('Support', async function () {
     // Bob extends the transferred token
     const expiryBefore = await support.read.expiresAt([1n])
     await support.write.support([otherWallet.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
       account: otherWallet.account,
     })
     const expiryAfter = await support.read.expiresAt([1n])
@@ -1860,7 +1866,7 @@ describe('Support', async function () {
 
     // Alice creates a fresh subscription (token 2)
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     assert.equal(
       await support.read.activeToken([walletClient.account.address]),
@@ -1886,7 +1892,7 @@ describe('Support', async function () {
 
     // Cap tier 2 at 1 slot
     await hook.write.setMaxSlots([2, 1])
-    const cost2 = await support.read.cost([2, 3])
+    const cost2 = await readCost(support, [2, 3])
 
     // Alice subscribes at tier 2
     await support.write.support([wallets[0].account.address, 2, 3], {
@@ -1921,7 +1927,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([3, 2])
-    const cost3 = await support.read.cost([3, 2])
+    const cost3 = await readCost(support, [3, 2])
 
     // Two holders in tier 3
     await support.write.support([wallets[0].account.address, 3, 2], {
@@ -1956,7 +1962,7 @@ describe('Support', async function () {
     await hook.write.setMaxSlots([0, 2])
 
     await support.write.support([wallets[0].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
       account: wallets[0].account,
     })
     assert.equal((await hook.read.tierHolders([0])).length, 1)
@@ -1992,11 +1998,11 @@ describe('Support', async function () {
 
     // Both wallets subscribe at tier 2
     await support.write.support([wallets[0].account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
       account: wallets[0].account,
     })
     await support.write.support([wallets[1].account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
       account: wallets[1].account,
     })
 
@@ -2022,7 +2028,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await hook.write.setMaxSlots([2, 2])
-    const cost2 = await support.read.cost([2, 2])
+    const cost2 = await readCost(support, [2, 2])
 
     // Alice subscribes
     await support.write.support([wallets[0].account.address, 2, 2], {
@@ -2039,7 +2045,7 @@ describe('Support', async function () {
 
     // Alice resubscribes — should work since she was removed from tier
     await support.write.support([wallets[0].account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
       account: wallets[0].account,
     })
 
@@ -2055,10 +2061,10 @@ describe('Support', async function () {
     await hook.write.setMaxSlots([2, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     await support.write.support([otherWallet.account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
       account: otherWallet.account,
     })
     await support.write.transferFrom(
@@ -2086,10 +2092,10 @@ describe('Support', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
     })
     await support.write.support([otherWallet.account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
       account: otherWallet.account,
     })
     await support.write.transferFrom(
@@ -2106,7 +2112,7 @@ describe('Support', async function () {
 
     const expiryBefore = await support.read.expiresAt([2n])
     await support.write.support([walletClient.account.address, 2, 1], {
-      value: await support.read.cost([2, 1]),
+      value: await readCost(support, [2, 1]),
     })
 
     assert.equal(await support.read.totalSupply(), 2n)
@@ -2125,14 +2131,14 @@ describe('Support', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     await hook.write.setMaxSlots([2, 1])
-    const cost2 = await support.read.cost([2, 1])
+    const cost2 = await readCost(support, [2, 1])
 
     await support.write.support([wallets[0].account.address, 0, 1], {
-      value: await support.read.cost([0, 1]),
+      value: await readCost(support, [0, 1]),
       account: wallets[0].account,
     })
     await support.write.support([wallets[1].account.address, 2, 3], {
-      value: await support.read.cost([2, 3]),
+      value: await readCost(support, [2, 3]),
       account: wallets[1].account,
     })
     await support.write.transferFrom(
@@ -2163,7 +2169,7 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.setTierPrice([0, 0n])
-    assert.equal(await support.read.cost([0, 1]), 0n)
+    assert.equal(await readCost(support, [0, 1]), 0n)
 
     for (let i = 0; i < Math.min(wallets.length, 5); i++) {
       await support.write.support([wallets[i].account.address, 0, 1], {
@@ -2209,7 +2215,7 @@ describe('Support', async function () {
     const [tier] = await support.read.currentTier([1n])
     assert.equal(tier, 2)
 
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 2)
   })
 })
@@ -2238,7 +2244,7 @@ describe('BaseSupport', async function () {
 
   it('Should create subscriptions with IDs but no NFTs', async function () {
     const { support } = await deployBase()
-    const cost = await support.read.cost([0, 1])
+    const cost = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,
@@ -2249,14 +2255,14 @@ describe('BaseSupport', async function () {
       await support.read.activeToken([walletClient.account.address]),
       1n,
     )
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 1)
     assert.equal(segs[0].tier, 0)
   })
 
   it('Should extend and change tiers without NFTs', async function () {
     const { support } = await deployBase()
-    const cost = await support.read.cost([0, 1])
+    const cost = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,
@@ -2277,20 +2283,20 @@ describe('BaseSupport', async function () {
     await support.write.support([walletClient.account.address, 2, 1], {
       value: parseEther('1'),
     })
-    const segs = await support.read.segments([1n])
+    const segs = await support.read.tierPeriods([1n])
     assert.equal(segs.length, 2)
     assert.equal(segs[1].tier, 2)
   })
 
   it('Should track multiple subscribers independently', async function () {
     const { support } = await deployBase()
-    const cost = await support.read.cost([0, 1])
+    const cost = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,
     })
     await support.write.support([otherWallet.account.address, 1, 1], {
-      value: await support.read.cost([1, 1]),
+      value: await readCost(support, [1, 1]),
       account: otherWallet.account,
     })
 
@@ -2307,7 +2313,7 @@ describe('BaseSupport', async function () {
 
   it('Should create new subscription ID after expiry', async function () {
     const { support, priceFeed } = await deployBase()
-    const cost = await support.read.cost([0, 1])
+    const cost = await readCost(support, [0, 1])
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,

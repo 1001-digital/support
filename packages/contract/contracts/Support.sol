@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {HasPriceFeed, AggregatorV3Interface} from "@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol";
 import {WithSaleStart} from "@1001-digital/erc721-extensions/contracts/WithSaleStart.sol";
-import {Segment} from "./interfaces/ISupportRenderer.sol";
+import {TierPeriod} from "./interfaces/ISupportRenderer.sol";
 import {ISubscriptionHook} from "./interfaces/ISubscriptionHook.sol";
 
 /**
@@ -74,7 +74,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     mapping(address => uint256) public activeToken;
     mapping(uint256 => uint64) public startedAt;
     mapping(uint256 => uint64) public expiresAt;
-    mapping(uint256 => Segment[]) internal _segments;
+    mapping(uint256 => TierPeriod[]) internal _tierPeriods;
 
     // --- Constructor ---
 
@@ -177,30 +177,21 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         emit Supported(recipient, tier, tokenId, duration, 0, newExpiry);
     }
 
-    /// @notice Get the base ETH cost for a tier and duration (new subscription).
-    function cost(uint8 tier, uint32 duration) external view returns (uint256) {
+    /// @notice Get cost and adjusted duration for a tier and duration.
+    function estimate(uint8 tier, uint32 duration, address subscriber) external view returns (uint256 ethCost, uint32 adjustedDuration) {
         if (tier >= 4) revert InvalidTier();
         if (duration == 0) revert InvalidDuration();
+        (, bool isNew, uint8 previousTier) = _resolveSubscription(subscriber);
         ISubscriptionHook.Adjustments memory adj = _beforeSubscribe(
-            hook, tier, duration, address(0), true, type(uint8).max
-        );
-        return _baseCost(adj.adjustedUSD);
-    }
-
-    /// @notice Get cost and adjusted duration for a tier (accounts for hook adjustments).
-    function estimate(uint8 tier, uint32 duration) external view returns (uint256 ethCost, uint32 adjustedDuration) {
-        if (tier >= 4) revert InvalidTier();
-        if (duration == 0) revert InvalidDuration();
-        ISubscriptionHook.Adjustments memory adj = _beforeSubscribe(
-            hook, tier, duration, address(0), true, type(uint8).max
+            hook, tier, duration, subscriber, isNew, previousTier
         );
         ethCost = _baseCost(adj.adjustedUSD);
         adjustedDuration = adj.adjustedDuration;
     }
 
-    /// @notice Get the segments of a subscription.
-    function segments(uint256 tokenId) external view returns (Segment[] memory) {
-        return _segments[tokenId];
+    /// @notice Get the tier periods of a subscription.
+    function tierPeriods(uint256 tokenId) external view returns (TierPeriod[] memory) {
+        return _tierPeriods[tokenId];
     }
 
     /// @notice Get the current tier for a subscription.
@@ -259,11 +250,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // --- Subscription Internals ---
 
-    /// @dev Resolve the subscriber's current token, syncing expired pointers.
+    /// @dev Resolve the subscriber's current token and previous tier.
     ///      Returns the previous tier even for expired tokens so hooks can clean up.
-    function _resolveSubscription(address subscriber) internal returns (uint256 tokenId, bool isNew, uint8 previousTier) {
+    function _resolveSubscription(address subscriber) internal view returns (uint256 tokenId, bool isNew, uint8 previousTier) {
+        if (subscriber == address(0)) return (0, true, type(uint8).max);
         uint256 previousTokenId = activeToken[subscriber];
-        tokenId = _syncActiveToken(subscriber);
+        tokenId = _activeTokenOf(subscriber);
         isNew = tokenId == 0;
         if (tokenId != 0) previousTokenId = tokenId;
         previousTier = previousTokenId != 0 ? _lastTier(previousTokenId) : type(uint8).max;
@@ -308,13 +300,13 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (isNew) {
             tokenId = ++_tokenIdCounter;
             _onNewSubscription(recipient, tokenId);
-            activeToken[recipient] = tokenId;
             startedAt[tokenId] = start;
-            _segments[tokenId].push(Segment(tier, start));
+            _tierPeriods[tokenId].push(TierPeriod(tier, start));
         } else if (tier != _lastTier(tokenId)) {
-            _segments[tokenId].push(Segment(tier, uint64(block.timestamp)));
+            _tierPeriods[tokenId].push(TierPeriod(tier, uint64(block.timestamp)));
         }
 
+        activeToken[recipient] = tokenId;
         expiresAt[tokenId] = newExpiry;
         return tokenId;
     }
@@ -323,13 +315,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         tokenId = activeToken[supporter];
         if (tokenId == 0 || block.timestamp >= expiresAt[tokenId]) {
             return 0;
-        }
-    }
-
-    function _syncActiveToken(address supporter) internal virtual returns (uint256 tokenId) {
-        tokenId = _activeTokenOf(supporter);
-        if (activeToken[supporter] != tokenId) {
-            activeToken[supporter] = tokenId;
         }
     }
 
@@ -348,7 +333,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     function _lastTier(uint256 tokenId) internal view returns (uint8) {
-        Segment[] storage segs = _segments[tokenId];
+        TierPeriod[] storage segs = _tierPeriods[tokenId];
         return segs[segs.length - 1].tier;
     }
 

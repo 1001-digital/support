@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.28;
 
-struct Segment {
+struct TierPeriod {
     uint8 tier;
     uint64 startedAt;
 }
@@ -16,7 +16,7 @@ interface ISupportRenderer {
         uint64 expiresAt;
         uint8 displayTier;
         bool active;
-        Segment[] segments;
+        TierPeriod[] tierPeriods;
     }
 
     function tokenURI(TokenData calldata data) external view returns (string memory);

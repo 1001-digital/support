@@ -133,21 +133,12 @@ export const SupportAbi = [
   },
   {
     type: 'function',
-    name: 'cost',
-    stateMutability: 'view',
-    inputs: [
-      { name: 'tier', type: 'uint8' },
-      { name: 'duration', type: 'uint32' },
-    ],
-    outputs: [{ name: '', type: 'uint256' }],
-  },
-  {
-    type: 'function',
     name: 'estimate',
     stateMutability: 'view',
     inputs: [
       { name: 'tier', type: 'uint8' },
       { name: 'duration', type: 'uint32' },
+      { name: 'subscriber', type: 'address' },
     ],
     outputs: [
       { name: 'ethCost', type: 'uint256' },
@@ -156,7 +147,7 @@ export const SupportAbi = [
   },
   {
     type: 'function',
-    name: 'segments',
+    name: 'tierPeriods',
     stateMutability: 'view',
     inputs: [{ name: 'tokenId', type: 'uint256' }],
     outputs: [

@@ -5,7 +5,7 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
 import {WithENSReverseLookup} from "@1001-digital/erc721-extensions/contracts/WithENSReverseLookup.sol";
-import {ISupportRenderer, Segment} from "../interfaces/ISupportRenderer.sol";
+import {ISupportRenderer, TierPeriod} from "../interfaces/ISupportRenderer.sol";
 
 contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
 
@@ -78,13 +78,13 @@ contract SupportRenderer is ISupportRenderer, WithENSReverseLookup {
             '{"trait_type":"Expires At","display_type":"date","value":', Strings.toString(uint256(data.expiresAt)), '}'
         );
 
-        for (uint256 i; i < data.segments.length; ++i) {
-            uint64 segEnd = i + 1 < data.segments.length ? data.segments[i + 1].startedAt : data.expiresAt;
+        for (uint256 i; i < data.tierPeriods.length; ++i) {
+            uint64 segEnd = i + 1 < data.tierPeriods.length ? data.tierPeriods[i + 1].startedAt : data.expiresAt;
             attrs = string.concat(
                 attrs,
-                ',{"trait_type":"Segment ', Strings.toString(i + 1),
-                '","value":"Tier ', Strings.toString(data.segments[i].tier),
-                ', ', Strings.toString((segEnd - data.segments[i].startedAt) / 1 days), 'd"}'
+                ',{"trait_type":"Tier Period ', Strings.toString(i + 1),
+                '","value":"Tier ', Strings.toString(data.tierPeriods[i].tier),
+                ', ', Strings.toString((segEnd - data.tierPeriods[i].startedAt) / 1 days), 'd"}'
             );
         }
 
