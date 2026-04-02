@@ -11,11 +11,11 @@ export default buildModule('EvmNowSupportersModule', (m) => {
   const support = m.contract('SupportToken', [
     'EVM.NOW',
     'EVMNOW',
-    logo,
     priceFeed,
     tierPrices,
-    renderer,
     saleStart,
+    logo,
+    renderer,
   ])
 
   m.call(support, 'setHook', [hook])
