@@ -11,6 +11,8 @@ interface ISupportRenderer {
         string logo;
         uint64 startedAt;
         uint64 expiresAt;
+        uint64 createdAt;
+        uint64 saleStart;
         uint8 displayTier;
         bool active;
         TierPeriod[] tierPeriods;

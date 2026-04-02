@@ -51,8 +51,8 @@ contract SupportRenderer is ISupportRenderer, Ownable, WithENSReverseLookup {
     // --- SVG ---
 
     function _buildSVG(TokenData calldata data, string memory safeName) internal view returns (string memory) {
-        uint256 dayNum = block.timestamp >= data.startedAt
-            ? (block.timestamp - data.startedAt) / 1 days + 1
+        uint256 dayNum = data.createdAt >= data.saleStart
+            ? (data.createdAt - data.saleStart) / 1 days + 1
             : 0;
         uint256 dur = data.active
             ? (block.timestamp - data.startedAt) / 1 days

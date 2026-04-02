@@ -44,13 +44,14 @@ describe('Support', async function () {
     const priceFeed = await viem.deployContract('MockPriceFeed', [ETH_USD])
     const renderer = await viem.deployContract('SupportRenderer', [])
     await configureBadges(renderer)
+    const { timestamp: saleStart } = await publicClient.getBlock()
     const support = await viem.deployContract('SupportToken', [
       walletClient.account.address,
       'TestProject',
       'TEST',
       priceFeed.address,
       tierPrices,
-      0n,
+      saleStart,
       '<path d="M0 0"/>',
       renderer.address,
     ])
@@ -121,12 +122,12 @@ describe('Support', async function () {
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
     })
-    const firstExpiry = await support.read.expiresAt([1n])
+    const firstExpiry = (await support.read.subscriptions([1n]))[2]
 
     await support.write.support([walletClient.account.address, 0, 1], {
       value: ethCost,
     })
-    const secondExpiry = await support.read.expiresAt([1n])
+    const secondExpiry = (await support.read.subscriptions([1n]))[2]
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n)
 
@@ -158,7 +159,7 @@ describe('Support', async function () {
     // Total ~36 days from now (> 30d minimum)
     // Cost: only 1 month at $25 = $25
     const block = await publicClient.getBlock()
-    const expiryBefore = await support.read.expiresAt([1n])
+    const expiryBefore = (await support.read.subscriptions([1n]))[2]
     const remaining = expiryBefore - block.timestamp
 
     const hash = await support.write.support(
@@ -180,7 +181,7 @@ describe('Support', async function () {
     assert.ok(paid < parseEther('1'))
 
     // Expiry = now + converted remaining + 1 month
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
     const converted = remaining * 5n / 25n
     const expectedExpiry = block.timestamp + converted + 30n * 24n * 60n * 60n
 
@@ -227,7 +228,7 @@ describe('Support', async function () {
     assert.ok(balanceBefore - balanceAfter > 0n)
 
     const block = await publicClient.getBlock()
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
     const minExpiry = block.timestamp + 30n * 24n * 60n * 60n
 
     // Should be at least 30 days from now (the minimum)
@@ -244,14 +245,14 @@ describe('Support', async function () {
     await support.write.support([walletClient.account.address, 2, 1], {
       value: await readCost(support, [2, 1]),
     })
-    const expiryBefore = await support.read.expiresAt([1n])
+    const expiryBefore = (await support.read.subscriptions([1n]))[2]
 
     // Downgrade to tier 0 with duration 0 — free, remaining time converts
     await support.write.support([walletClient.account.address, 0, 0], {
       value: 0n,
     })
 
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
     assert.ok(expiryAfter > expiryBefore) // converted time is longer
 
     const [tier] = await support.read.currentTier([1n])
@@ -301,7 +302,7 @@ describe('Support', async function () {
     await priceFeed.write.setPrice([ETH_USD])
 
     const block = await publicClient.getBlock()
-    const expiryBefore = await support.read.expiresAt([1n])
+    const expiryBefore = (await support.read.subscriptions([1n]))[2]
     const remaining = expiryBefore - block.timestamp
 
     // Downgrade to tier 0 ($5/mo) for 1 new month
@@ -311,7 +312,7 @@ describe('Support', async function () {
       value: await readCost(support, [0, 1]),
     })
 
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
     // Converted remaining = remaining * 25 / 5 = remaining * 5
     const expectedExpiry =
       block.timestamp + remaining * 5n + 30n * 24n * 60n * 60n
@@ -1319,10 +1320,10 @@ describe('Support', async function () {
     const { support, hook } = await deploy()
 
     await support.write.grant([otherWallet.account.address, 0, 1, 0n])
-    const firstExpiry = await support.read.expiresAt([1n])
+    const firstExpiry = (await support.read.subscriptions([1n]))[2]
 
     await support.write.grant([otherWallet.account.address, 0, 1, 0n])
-    const secondExpiry = await support.read.expiresAt([1n])
+    const secondExpiry = (await support.read.subscriptions([1n]))[2]
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n)
     assert.equal(await support.read.totalSupply(), 1n)
@@ -1351,13 +1352,13 @@ describe('Support', async function () {
     const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
-    assert.equal(await support.read.startedAt([tokenId]), futureStart)
+    assert.equal((await support.read.subscriptions([tokenId]))[1], futureStart)
 
     const periods = await support.read.tierPeriods([tokenId])
     assert.equal(periods[0].startedAt, futureStart)
 
     // Expiry is based on future start + 3 months
-    const expires = await support.read.expiresAt([tokenId])
+    const expires = (await support.read.subscriptions([tokenId]))[2]
     assert.equal(expires, futureStart + 3n * 30n * 24n * 60n * 60n)
   })
 
@@ -1371,10 +1372,10 @@ describe('Support', async function () {
     const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
-    assert.equal(await support.read.startedAt([tokenId]), pastStart)
+    assert.equal((await support.read.subscriptions([tokenId]))[1], pastStart)
 
     // Expiry is pastStart + 3 months = ~2 months from now
-    const expires = await support.read.expiresAt([tokenId])
+    const expires = (await support.read.subscriptions([tokenId]))[2]
     assert.equal(expires, pastStart + 3n * 30n * 24n * 60n * 60n)
   })
 
@@ -1382,15 +1383,15 @@ describe('Support', async function () {
     const { support } = await deploy()
     await support.write.grant([otherWallet.account.address, 0, 1, 0n])
 
-    const firstExpiry = await support.read.expiresAt([1n])
-    const firstStart = await support.read.startedAt([1n])
+    const firstExpiry = (await support.read.subscriptions([1n]))[2]
+    const firstStart = (await support.read.subscriptions([1n]))[1]
 
     // Extend with a startAt — should be ignored, expiry extends from current
     await support.write.grant([otherWallet.account.address, 0, 1, 9999999999n])
 
-    assert.equal(await support.read.startedAt([1n]), firstStart) // unchanged
+    assert.equal((await support.read.subscriptions([1n]))[1], firstStart) // unchanged
     assert.equal(
-      await support.read.expiresAt([1n]),
+      (await support.read.subscriptions([1n]))[2],
       firstExpiry + 30n * 24n * 60n * 60n,
     )
   })
@@ -1440,11 +1441,11 @@ describe('Support', async function () {
 
     // Grant tier 2 ($25/mo) for 2 months
     await support.write.grant([otherWallet.account.address, 2, 2, 0n])
-    const expiryBefore = await support.read.expiresAt([1n])
+    const expiryBefore = (await support.read.subscriptions([1n]))[2]
 
     // Grant tier change to tier 0 ($5/mo) with 1 month — should NOT convert remaining time
     await support.write.grant([otherWallet.account.address, 0, 1, 0n])
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
 
     // Expiry is simply old expiry + 1 month (no 5x conversion like support() does)
     assert.equal(expiryAfter, expiryBefore + 30n * 24n * 60n * 60n)
@@ -1457,11 +1458,11 @@ describe('Support', async function () {
     const { support } = await deploy()
 
     await support.write.grant([otherWallet.account.address, 0, 2, 0n])
-    const expiryBefore = await support.read.expiresAt([1n])
+    const expiryBefore = (await support.read.subscriptions([1n]))[2]
 
     // Change tier only, no extension
     await support.write.grant([otherWallet.account.address, 2, 0, 0n])
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
 
     assert.equal(expiryAfter, expiryBefore) // unchanged
     const [tier] = await support.read.currentTier([1n])
@@ -1722,7 +1723,7 @@ describe('Support', async function () {
   })
 
   it('Should revert setSaleStart after sale has started', async function () {
-    const { support, hook } = await deploy() // saleStart = 0, already started
+    const { support, hook } = await deploy() // saleStart = now, already started
 
     await assert.rejects(
       support.write.setSaleStart([9999999999n]),
@@ -1751,13 +1752,13 @@ describe('Support', async function () {
       value: await readCost(support, [0, 1]),
       account: otherWallet.account,
     })
-    const firstExpiry = await support.read.expiresAt([1n])
+    const firstExpiry = (await support.read.subscriptions([1n]))[2]
 
     // walletClient gifts an extension
     await support.write.support([otherWallet.account.address, 0, 1], {
       value: await readCost(support, [0, 1]),
     })
-    const secondExpiry = await support.read.expiresAt([1n])
+    const secondExpiry = (await support.read.subscriptions([1n]))[2]
 
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n)
     assert.equal(await support.read.totalSupply(), 1n) // no new NFT
@@ -1784,8 +1785,7 @@ describe('Support', async function () {
     assert.ok(tokenId > 0n)
 
     // State should be consistent despite re-entrant extension
-    const started = await support.read.startedAt([tokenId])
-    const expires = await support.read.expiresAt([tokenId])
+    const [, started, expires] = await support.read.subscriptions([tokenId])
     assert.ok(expires > started)
 
     const periods = await support.read.tierPeriods([tokenId])
@@ -1806,8 +1806,7 @@ describe('Support', async function () {
     ])
     assert.equal(tokenId, 1n)
 
-    const expires = await support.read.expiresAt([tokenId])
-    const started = await support.read.startedAt([tokenId])
+    const [, started, expires] = await support.read.subscriptions([tokenId])
 
     const uint64Max = (1n << 64n) - 1n
     const expectedDuration = BigInt(maxDuration) * 30n * 24n * 60n * 60n
@@ -1835,7 +1834,7 @@ describe('Support', async function () {
     const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
-    const expires = await support.read.expiresAt([tokenId])
+    const expires = (await support.read.subscriptions([tokenId]))[2]
     const uint64Max = (1n << 64n) - 1n
 
     assert.ok(expires > 0n)
@@ -1971,12 +1970,12 @@ describe('Support', async function () {
     )
 
     // Bob extends the transferred token
-    const expiryBefore = await support.read.expiresAt([1n])
+    const expiryBefore = (await support.read.subscriptions([1n]))[2]
     await support.write.support([otherWallet.account.address, 2, 1], {
       value: await readCost(support, [2, 1]),
       account: otherWallet.account,
     })
-    const expiryAfter = await support.read.expiresAt([1n])
+    const expiryAfter = (await support.read.subscriptions([1n]))[2]
     assert.equal(expiryAfter, expiryBefore + 30n * 24n * 60n * 60n)
 
     // Alice creates a fresh subscription (token 2)
@@ -2263,13 +2262,13 @@ describe('BaseSupport', async function () {
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,
     })
-    const firstExpiry = await support.read.expiresAt([1n])
+    const firstExpiry = (await support.read.subscriptions([1n]))[2]
 
     // Extend same tier
     await support.write.support([walletClient.account.address, 0, 1], {
       value: cost,
     })
-    const secondExpiry = await support.read.expiresAt([1n])
+    const secondExpiry = (await support.read.subscriptions([1n]))[2]
     assert.equal(secondExpiry, firstExpiry + 30n * 24n * 60n * 60n)
 
     // Still only one subscription ID

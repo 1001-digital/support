@@ -48,8 +48,10 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
             supporter: owner,
             projectName: name(),
             logo: logo,
-            startedAt: startedAt[tokenId],
-            expiresAt: expiresAt[tokenId],
+            startedAt: subscriptions[tokenId].startedAt,
+            expiresAt: subscriptions[tokenId].expiresAt,
+            createdAt: subscriptions[tokenId].createdAt,
+            saleStart: uint64(saleStart()),
             displayTier: displayTier,
             active: active,
             tierPeriods: tierHistory[tokenId]

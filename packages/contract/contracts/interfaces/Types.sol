@@ -5,3 +5,9 @@ struct TierPeriod {
     uint8 tier;
     uint64 startedAt;
 }
+
+struct SubscriptionData {
+    uint64 createdAt;
+    uint64 startedAt;
+    uint64 expiresAt;
+}

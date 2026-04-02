@@ -4,7 +4,7 @@ pragma solidity ^0.8.28;
 import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step.sol";
 import {HasPriceFeed, AggregatorV3Interface} from "@1001-digital/erc721-extensions/contracts/HasPriceFeed.sol";
 import {WithSaleStart} from "@1001-digital/erc721-extensions/contracts/WithSaleStart.sol";
-import {TierPeriod} from "./interfaces/Types.sol";
+import {TierPeriod, SubscriptionData} from "./interfaces/Types.sol";
 import {ISubscriptionHook} from "./interfaces/ISubscriptionHook.sol";
 
 /**
@@ -72,8 +72,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     // Subscriptions
     mapping(address => uint256) public subscription;
-    mapping(uint256 => uint64) public startedAt;
-    mapping(uint256 => uint64) public expiresAt;
+    mapping(uint256 => SubscriptionData) public subscriptions;
     mapping(uint256 => TierPeriod[]) public tierHistory;
 
     // --- Constructor ---
@@ -139,9 +138,9 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
             newExpiry = _addDuration(start, adj.adjustedDuration);
         } else if (tier == previousTier) {
             required = _baseCost(adj.adjustedUSD);
-            newExpiry = _addDuration(expiresAt[subId], adj.adjustedDuration);
+            newExpiry = _addDuration(subscriptions[subId].expiresAt, adj.adjustedDuration);
         } else {
-            (required, newExpiry) = _changeTier(expiresAt[subId], previousTier, tier, adj);
+            (required, newExpiry) = _changeTier(subscriptions[subId].expiresAt, previousTier, tier, adj);
         }
 
         if (msg.value < required) revert InsufficientPayment();
@@ -149,7 +148,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         subId = _applySubscription(recipient, subId, tier, newExpiry, start);
         _notifyHook(h, previousTier, tier, recipient);
         _afterSubscriptionChange(subId);
-        emit Supported(recipient, tier, subId, duration, required, startedAt[subId], newExpiry);
+        emit Supported(recipient, tier, subId, duration, required, subscriptions[subId].startedAt, newExpiry);
 
         uint256 excess = msg.value - required;
         if (excess > 0) {
@@ -168,13 +167,13 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         if (!active && duration == 0) revert InvalidDuration();
 
         uint64 start = startAt != 0 ? startAt : uint64(block.timestamp);
-        uint64 base = active ? expiresAt[subId] : start;
+        uint64 base = active ? subscriptions[subId].expiresAt : start;
         uint64 newExpiry = _addDuration(base, duration);
 
         subId = _applySubscription(recipient, subId, tier, newExpiry, start);
         _notifyHook(hook, previousTier, tier, recipient);
         _afterSubscriptionChange(subId);
-        emit Supported(recipient, tier, subId, duration, 0, startedAt[subId], newExpiry);
+        emit Supported(recipient, tier, subId, duration, 0, subscriptions[subId].startedAt, newExpiry);
     }
 
     /// @notice Get cost and adjusted duration for a tier and duration.
@@ -304,9 +303,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
             _onNewSubscription(recipient, subscriptionId);
         }
 
-        if (block.timestamp >= expiresAt[subscriptionId]) {
+        SubscriptionData storage sub = subscriptions[subscriptionId];
+
+        if (block.timestamp >= sub.expiresAt) {
             // New or reactivated — reset
-            startedAt[subscriptionId] = start;
+            if (sub.createdAt == 0) sub.createdAt = uint64(block.timestamp);
+            sub.startedAt = start;
             delete tierHistory[subscriptionId];
             tierHistory[subscriptionId].push(TierPeriod(tier, start));
         } else if (tier != _lastTier(subscriptionId)) {
@@ -314,7 +316,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         }
 
         subscription[recipient] = subscriptionId;
-        expiresAt[subscriptionId] = newExpiry;
+        sub.expiresAt = newExpiry;
         return subscriptionId;
     }
 
@@ -327,7 +329,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     // --- Subscription helpers ---
 
     function _isSubscriptionActive(uint256 subId) internal view returns (bool) {
-        return subId != 0 && block.timestamp < expiresAt[subId] && startedAt[subId] <= block.timestamp;
+        return subId != 0 && block.timestamp < subscriptions[subId].expiresAt && subscriptions[subId].startedAt <= block.timestamp;
     }
 
     function _lastTier(uint256 subscriptionId) internal view returns (uint8) {
