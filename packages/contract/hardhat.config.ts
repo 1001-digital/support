@@ -58,13 +58,13 @@ export default defineConfig({
       type: 'http',
       chainType: 'l1',
       url: configVariable('SEPOLIA_RPC_URL'),
-      accounts: [configVariable('DEPLOYER_PRIVATE_KEY')],
+      accounts: [configVariable('DEPLOYER_1001_PRIVATE_KEY')],
     },
     mainnet: {
       type: 'http',
       chainType: 'l1',
       url: configVariable('MAINNET_RPC_URL'),
-      accounts: [configVariable('DEPLOYER_PRIVATE_KEY')],
+      accounts: [configVariable('DEPLOYER_1001_PRIVATE_KEY')],
     },
   },
   verify: {
