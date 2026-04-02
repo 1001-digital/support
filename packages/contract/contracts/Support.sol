@@ -304,7 +304,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         // Upgrading must result in at least 30 days from now.
         if (newPrice > oldPrice) {
             uint256 minExpiry = uint256(block.timestamp) + 30 days;
-            if (rawExpiry < minExpiry) rawExpiry = minExpiry;
+            if (rawExpiry < minExpiry) {
+                required += _baseCost(uint256(newPrice) * (minExpiry - rawExpiry) / 30 days);
+                rawExpiry = minExpiry;
+            }
         }
 
         newExpiry = rawExpiry > type(uint64).max ? type(uint64).max : uint64(rawExpiry);

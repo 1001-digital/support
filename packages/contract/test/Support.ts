@@ -200,19 +200,31 @@ describe('Support', async function () {
     assert.equal(segs[1].tier, 2)
   })
 
-  it('Should upgrade with duration 0 (convert time, 30d minimum)', async function () {
+  it('Should upgrade with duration 0 (convert time, 30d minimum, pay gap)', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 2], {
       value: await readCost(support, [0, 2]),
     })
 
-    // Upgrade to tier 2 with duration 0 — free, remaining time converts
+    // Upgrade to tier 2 with duration 0 — remaining time converts
     // ~60 days at $5 converts to ~12 days at $25 (5/25 ratio)
     // 12 days < 30d minimum, so expiry = now + 30 days
-    await support.write.support([walletClient.account.address, 2, 0], {
-      value: 0n,
+    // User must pay for the ~18 day gap at $25/mo
+    const balanceBefore = await publicClient.getBalance({
+      address: walletClient.account.address,
     })
+
+    await support.write.support([walletClient.account.address, 2, 0], {
+      value: parseEther('0.01'), // overpay — excess is refunded
+    })
+
+    const balanceAfter = await publicClient.getBalance({
+      address: walletClient.account.address,
+    })
+
+    // Should have paid something (not free)
+    assert.ok(balanceBefore - balanceAfter > 0n)
 
     const block = await publicClient.getBlock()
     const expiryAfter = await support.read.expiresAt([1n])
