@@ -196,15 +196,13 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
 
     /// @notice Get the current tier for a subscription.
     function currentTier(uint256 subscriptionId) public view returns (uint8, bool) {
-        uint64 end = expiresAt[subscriptionId];
-        if (end == 0 || block.timestamp >= end) return (0, false);
+        if (!_isSubscriptionActive(subscriptionId)) return (0, false);
         return (_lastTier(subscriptionId), true);
     }
 
     /// @notice Check whether a subscriber's subscription is currently active.
     function isActive(address supporter) public view returns (bool) {
-        uint256 subId = subscription[supporter];
-        return subId != 0 && block.timestamp < expiresAt[subId];
+        return _isSubscriptionActive(subscription[supporter]);
     }
 
     // --- Owner ---
@@ -260,7 +258,7 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     ) {
         if (supporter == address(0)) return (0, false, NO_TIER);
         subscriptionId = subscription[supporter];
-        active = subscriptionId != 0 && block.timestamp < expiresAt[subscriptionId];
+        active = _isSubscriptionActive(subscriptionId);
         previousTier = subscriptionId != 0 ? _lastTier(subscriptionId) : NO_TIER;
     }
 
@@ -327,6 +325,10 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     }
 
     // --- Subscription helpers ---
+
+    function _isSubscriptionActive(uint256 subId) internal view returns (bool) {
+        return subId != 0 && block.timestamp < expiresAt[subId] && startedAt[subId] <= block.timestamp;
+    }
 
     function _lastTier(uint256 subscriptionId) internal view returns (uint8) {
         TierPeriod[] storage periods = tierHistory[subscriptionId];

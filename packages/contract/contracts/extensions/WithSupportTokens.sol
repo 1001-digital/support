@@ -68,7 +68,7 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
 
         if (from == address(0) || to == address(0)) return from;
 
-        bool wasActive = block.timestamp < expiresAt[tokenId];
+        bool wasActive = _isSubscriptionActive(tokenId);
         uint8 tier;
         if (wasActive) tier = _lastTier(tokenId);
 
