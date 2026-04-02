@@ -5,7 +5,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ISubscriptionHook} from "../interfaces/ISubscriptionHook.sol";
 
 interface ISupportRead {
-    function activeTokenOf(address supporter) external view returns (uint256);
+    function subscription(address subscriber) external view returns (uint256);
     function currentTier(uint256 tokenId) external view returns (uint8 tier, bool active);
 }
 
@@ -134,7 +134,7 @@ contract MaxSlotsHook is ISubscriptionHook, Ownable {
     }
 
     function _isActiveOnTier(address holder, uint8 tier) internal view returns (bool) {
-        uint256 tokenId = ISupportRead(support).activeTokenOf(holder);
+        uint256 tokenId = ISupportRead(support).subscription(holder);
         if (tokenId == 0) return false;
         (uint8 t, bool active) = ISupportRead(support).currentTier(tokenId);
         return active && t == tier;

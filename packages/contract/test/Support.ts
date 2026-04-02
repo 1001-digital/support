@@ -84,7 +84,7 @@ describe('Support', async function () {
 
     assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
     assert.equal(
@@ -332,7 +332,7 @@ describe('Support', async function () {
     // Same token reused — no new mint
     assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
     assert.equal(
@@ -558,11 +558,11 @@ describe('Support', async function () {
 
     // Active subscription moves with the NFT
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       0n,
     )
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
 
@@ -612,7 +612,7 @@ describe('Support', async function () {
     )
   })
 
-  it("Should set receiver's activeToken if they have no active subscription", async function () {
+  it("Should set receiver's subscription if they have none", async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 1], {
@@ -621,7 +621,7 @@ describe('Support', async function () {
 
     // otherWallet has no subscription
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       0n,
     )
 
@@ -633,7 +633,7 @@ describe('Support', async function () {
 
     // Now otherWallet inherits the active subscription
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
   })
@@ -666,12 +666,12 @@ describe('Support', async function () {
 
     // Raw mapping tracks token for reuse, but no active subscription
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
     assert.equal(
-      await support.read.activeTokenOf([otherWallet.account.address]),
-      0n,
+      await support.read.isActive([otherWallet.account.address]),
+      false,
     )
   })
 
@@ -689,7 +689,7 @@ describe('Support', async function () {
       1n,
     ])
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       0n,
     )
     assert.equal(
@@ -703,7 +703,7 @@ describe('Support', async function () {
     })
     assert.equal(await support.read.totalSupply(), 2n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       2n,
     )
     assert.equal(
@@ -742,7 +742,7 @@ describe('Support', async function () {
 
     assert.equal(await support.read.totalSupply(), 1n) // no new mint
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
     const [tier, active] = await support.read.currentTier([1n])
@@ -1219,11 +1219,11 @@ describe('Support', async function () {
 
     assert.equal(await support.read.totalSupply(), 2n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       2n,
     )
   })
@@ -1237,7 +1237,7 @@ describe('Support', async function () {
 
     assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
     assert.equal(
@@ -1283,7 +1283,7 @@ describe('Support', async function () {
 
     await support.write.grant([otherWallet.account.address, 2, 3, futureStart])
 
-    const tokenId = await support.read.activeToken([
+    const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
     assert.equal(await support.read.startedAt([tokenId]), futureStart)
@@ -1303,7 +1303,7 @@ describe('Support', async function () {
 
     await support.write.grant([otherWallet.account.address, 0, 3, pastStart])
 
-    const tokenId = await support.read.activeToken([
+    const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
     assert.equal(await support.read.startedAt([tokenId]), pastStart)
@@ -1416,7 +1416,7 @@ describe('Support', async function () {
 
     assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
     assert.equal(
@@ -1675,7 +1675,7 @@ describe('Support', async function () {
     })
     await attacker.write.attack([0, 1, 1], { value: ethCost * 3n })
 
-    const tokenId = await support.read.activeToken([attacker.address])
+    const tokenId = await support.read.subscription([attacker.address])
     assert.ok(tokenId > 0n)
 
     // State should be consistent despite re-entrant extension
@@ -1696,7 +1696,7 @@ describe('Support', async function () {
 
     await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n])
 
-    const tokenId = await support.read.activeToken([
+    const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
     assert.equal(tokenId, 1n)
@@ -1727,7 +1727,7 @@ describe('Support', async function () {
     await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n])
     await support.write.grant([otherWallet.account.address, 0, maxDuration, 0n])
 
-    const tokenId = await support.read.activeToken([
+    const tokenId = await support.read.subscription([
       otherWallet.account.address,
     ])
     const expires = await support.read.expiresAt([tokenId])
@@ -1847,7 +1847,7 @@ describe('Support', async function () {
       value: await readCost(support, [2, 2]),
     })
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
 
@@ -1857,11 +1857,11 @@ describe('Support', async function () {
       1n,
     ])
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       0n,
     )
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       1n,
     )
 
@@ -1879,7 +1879,7 @@ describe('Support', async function () {
       value: await readCost(support, [0, 1]),
     })
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       2n,
     )
     assert.equal(await support.read.totalSupply(), 2n)
@@ -2143,7 +2143,7 @@ describe('BaseSupport', async function () {
 
     assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
     const segs = await support.read.tierPeriods([1n])
@@ -2193,11 +2193,11 @@ describe('BaseSupport', async function () {
 
     assert.equal(await support.read.totalSupply(), 2n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
     assert.equal(
-      await support.read.activeToken([otherWallet.account.address]),
+      await support.read.subscription([otherWallet.account.address]),
       2n,
     )
   })
@@ -2225,7 +2225,7 @@ describe('BaseSupport', async function () {
     })
     assert.equal(await support.read.totalSupply(), 1n)
     assert.equal(
-      await support.read.activeToken([walletClient.account.address]),
+      await support.read.subscription([walletClient.account.address]),
       1n,
     )
 

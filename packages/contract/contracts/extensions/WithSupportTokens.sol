@@ -81,8 +81,8 @@ abstract contract WithSupportTokens is Support, OnePerWallet {
         uint8 tier;
         if (wasActive) tier = _lastTier(tokenId);
 
-        activeToken[from] = 0;
-        activeToken[to] = tokenId; // always track, even if expired — so re-subscribe finds it
+        subscription[from] = 0;
+        subscription[to] = tokenId; // always track, even if expired — so re-subscribe finds it
 
         if (wasActive) {
             ISubscriptionHook h = hook;
