@@ -20,6 +20,7 @@ export default buildModule('SupportModule', (m) => {
     saleStart,
     logo,
     renderer,
+    '0x0000000000000000000000000000000000000000',
   ])
 
   return { support, renderer }

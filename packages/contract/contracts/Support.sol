@@ -81,12 +81,18 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         address _initialOwner,
         address _priceFeed,
         uint128[] memory _tierPrices,
-        uint256 _saleStart
+        uint256 _saleStart,
+        ISubscriptionHook _hook
     ) Ownable(_initialOwner) HasPriceFeed(_priceFeed) WithSaleStart(_saleStart) {
         for (uint256 i = 0; i < _tierPrices.length; i++) {
             if (_tierPrices[i] == 0) revert InvalidPrice();
         }
         tierPrices = _tierPrices;
+
+        if (address(_hook) != address(0)) {
+            hook = _hook;
+            emit HookUpdated(address(_hook));
+        }
     }
 
     // --- Ownership Overrides ---

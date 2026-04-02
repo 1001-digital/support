@@ -14,6 +14,7 @@ async function main() {
     await renderer.write.setTierBadge([i, b.name, b.bg, b.tc, b.width])
   }
   const [deployer] = await viem.getWalletClients()
+  const discountHook = await viem.deployContract('DiscountHook', [12, 20])
   const support = await viem.deployContract('SupportToken', [
     deployer.account.address,
     'EVM.NOW',
@@ -23,10 +24,8 @@ async function main() {
     0n,
     logo,
     renderer.address,
+    discountHook.address,
   ])
-
-  const discountHook = await viem.deployContract('DiscountHook', [12, 20])
-  await support.write.setHook([discountHook.address])
 
   const wallets = await viem.getWalletClients()
 

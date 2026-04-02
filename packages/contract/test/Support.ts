@@ -54,6 +54,7 @@ describe('Support', async function () {
       saleStart,
       '<path d="M0 0"/>',
       renderer.address,
+      zeroAddress,
     ])
 
     const discountHook = await viem.deployContract('DiscountHook', [
@@ -1643,6 +1644,11 @@ describe('Support', async function () {
     await configureBadges(renderer)
     const block = await publicClient.getBlock()
     const futureSaleStart = block.timestamp + 86400n // 1 day from chain time
+    const discountHook = await viem.deployContract('DiscountHook', [
+      discountMinMonths,
+      discountPercentOff,
+    ])
+
     const support = await viem.deployContract('SupportToken', [
       walletClient.account.address,
       'TestProject',
@@ -1652,13 +1658,8 @@ describe('Support', async function () {
       futureSaleStart,
       '<path d="M0 0"/>',
       renderer.address,
+      discountHook.address,
     ])
-
-    const discountHook = await viem.deployContract('DiscountHook', [
-      discountMinMonths,
-      discountPercentOff,
-    ])
-    await support.write.setHook([discountHook.address])
 
     return { support, priceFeed, renderer, discountHook, futureSaleStart }
   }
@@ -2210,6 +2211,7 @@ describe('Support', async function () {
         0n,
         '',
         zeroAddress,
+        zeroAddress,
       ]),
       /InvalidPrice/,
     )
@@ -2226,6 +2228,7 @@ describe('BaseSupport', async function () {
       priceFeed.address,
       tierPrices,
       0n,
+      zeroAddress,
     ])
 
     const discountHook = await viem.deployContract('DiscountHook', [

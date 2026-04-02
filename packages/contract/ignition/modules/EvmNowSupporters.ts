@@ -21,9 +21,8 @@ export default buildModule('EvmNowSupportersModule', (m) => {
     saleStart,
     logo,
     renderer,
+    hook,
   ])
-
-  m.call(support, 'setHook', [hook])
 
   return { support, renderer, hook }
 })
