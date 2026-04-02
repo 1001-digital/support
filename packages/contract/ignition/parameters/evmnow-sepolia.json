@@ -1,6 +1,6 @@
 {
   "EvmNowSupportersModule": {
-    "initialOwner": "0x5Ca3d797BF631603efCB3885C8B50A6d60834600",
+    "initialOwner": "0x100140d76e155d9289f5b0bb93548d56e3281001",
     "priceFeed": "0x694AA1769357215DE4FAC081bf1f309aDC325306",
     "saleStart": 1775080800
   }
