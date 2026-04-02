@@ -205,12 +205,12 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         return _isSubscriptionActive(subscription[supporter]);
     }
 
-    // --- Owner ---
-
     /// @notice Get the number of available tiers.
     function totalTiers() public view returns (uint256) {
         return tierPrices.length;
     }
+
+    // --- Owner ---
 
     /// @notice Update a tier's monthly USD price.
     function setTierPrice(uint8 tier, uint128 priceUSD) external onlyOwner {
