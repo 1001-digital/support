@@ -115,7 +115,7 @@ describe('Support', async function () {
 
   // --- Upgrade ---
 
-  it('Should upgrade immediately and charge difference', async function () {
+  it('Should upgrade immediately and convert remaining time', async function () {
     const { support, priceFeed, hook } = await deploy()
 
     // Subscribe tier 0 ($5/mo) for 2 months
@@ -123,7 +123,7 @@ describe('Support', async function () {
       value: await support.read.cost([0, 2]),
     })
 
-    // Advance 1 month — 1 month remaining at tier 0
+    // Advance 1 month — ~1 month remaining at tier 0
     await publicClient.request({
       method: 'evm_increaseTime' as any,
       params: [30 * 24 * 60 * 60],
@@ -132,12 +132,14 @@ describe('Support', async function () {
     await priceFeed.write.setPrice([ETH_USD])
 
     // Upgrade to tier 2 ($25/mo) for 1 new month
-    // Diff for ~1 remaining month: ($25 - $5) * 1 = $20/mo → ~$20
-    // Plus 1 new month at $25 = $25
-    // Total ~$45 / $2000 = ~0.0225 ETH
+    // Remaining ~30 days at $5 converts to ~6 days at $25 (5/25 ratio)
+    // Plus 1 new month at $25 = 30 days
+    // Total ~36 days from now (> 30d minimum)
+    // Cost: only 1 month at $25 = $25
+    const block = await publicClient.getBlock()
     const expiryBefore = await support.read.expiresAt([1n])
+    const remaining = expiryBefore - block.timestamp
 
-    // Overpay and check refund
     const hash = await support.write.support(
       [walletClient.account.address, 2, 1],
       { value: parseEther('1') },
@@ -156,9 +158,14 @@ describe('Support', async function () {
     assert.ok(paid > 0n)
     assert.ok(paid < parseEther('1'))
 
-    // Expiry extended by 1 month from old expiry
+    // Expiry = now + converted remaining + 1 month
     const expiryAfter = await support.read.expiresAt([1n])
-    assert.equal(expiryAfter, expiryBefore + 30n * 24n * 60n * 60n)
+    const converted = remaining * 5n / 25n
+    const expectedExpiry = block.timestamp + converted + 30n * 24n * 60n * 60n
+
+    // Allow 5 second tolerance for block timestamp drift
+    assert.ok(expiryAfter >= expectedExpiry - 5n)
+    assert.ok(expiryAfter <= expectedExpiry + 5n)
 
     // Current tier is now 2
     const [tier, active] = await support.read.currentTier([1n])
@@ -172,21 +179,27 @@ describe('Support', async function () {
     assert.equal(segs[1].tier, 2)
   })
 
-  it('Should upgrade with duration 0 (just pay diff)', async function () {
+  it('Should upgrade with duration 0 (convert time, 30d minimum)', async function () {
     const { support, hook } = await deploy()
 
     await support.write.support([walletClient.account.address, 0, 2], {
       value: await support.read.cost([0, 2]),
     })
-    const expiryBefore = await support.read.expiresAt([1n])
 
-    // Upgrade to tier 2 with duration 0 — only pay the diff, expiry unchanged
+    // Upgrade to tier 2 with duration 0 — free, remaining time converts
+    // ~60 days at $5 converts to ~12 days at $25 (5/25 ratio)
+    // 12 days < 30d minimum, so expiry = now + 30 days
     await support.write.support([walletClient.account.address, 2, 0], {
-      value: parseEther('1'),
+      value: 0n,
     })
 
+    const block = await publicClient.getBlock()
     const expiryAfter = await support.read.expiresAt([1n])
-    assert.equal(expiryAfter, expiryBefore) // no extension
+    const minExpiry = block.timestamp + 30n * 24n * 60n * 60n
+
+    // Should be at least 30 days from now (the minimum)
+    assert.ok(expiryAfter >= minExpiry - 5n)
+    assert.ok(expiryAfter <= minExpiry + 5n)
 
     const [tier] = await support.read.currentTier([1n])
     assert.equal(tier, 2)

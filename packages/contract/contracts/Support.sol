@@ -286,18 +286,19 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         uint128 oldPrice = tierPrices[fromTier];
         uint128 newPrice = tierPrices[toTier];
 
-        if (newPrice > oldPrice) {
-            uint256 diffUSD = uint256(newPrice - oldPrice) * remaining / 30 days;
-            required = _usdToEth(diffUSD + adj.adjustedUSD);
-            newExpiry = _addDuration(currentExpiry, adj.adjustedDuration);
-            return (required, newExpiry);
-        }
-
         required = _baseCost(adj.adjustedUSD);
+
         uint256 converted = newPrice == 0
             ? uint256(remaining)
             : uint256(remaining) * oldPrice / newPrice;
         uint256 rawExpiry = uint256(block.timestamp) + converted + uint256(adj.adjustedDuration) * 30 days;
+
+        // Upgrading must result in at least 30 days from now.
+        if (newPrice > oldPrice) {
+            uint256 minExpiry = uint256(block.timestamp) + 30 days;
+            if (rawExpiry < minExpiry) rawExpiry = minExpiry;
+        }
+
         newExpiry = rawExpiry > type(uint64).max ? type(uint64).max : uint64(rawExpiry);
     }
 
