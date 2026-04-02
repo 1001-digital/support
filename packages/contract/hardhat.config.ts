@@ -53,6 +53,10 @@ export default defineConfig({
     hardhatMainnet: {
       type: 'edr-simulated',
       chainType: 'l1',
+      forking: {
+        url: configVariable('MAINNET_RPC_URL'),
+        blockNumber: 24794242,
+      },
     },
     sepolia: {
       type: 'http',
