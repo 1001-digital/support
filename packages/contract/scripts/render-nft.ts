@@ -34,10 +34,10 @@ async function main() {
 
   for (let tier = 0; tier < tierPrices.length; tier++) {
     const wallet = wallets[tier]
-    const cost = await support.read.cost([tier, 1])
+    const [ethCost] = await support.read.estimate([tier, 1, wallet.account.address])
 
     await support.write.support([wallet.account.address, tier, 1], {
-      value: cost,
+      value: ethCost,
       account: wallet.account,
     })
 
