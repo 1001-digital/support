@@ -189,6 +189,11 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
         adjustedDuration = adj.adjustedDuration;
     }
 
+    /// @notice Get the number of available tiers.
+    function totalTiers() public view returns (uint256) {
+        return tierPrices.length;
+    }
+
     /// @notice Get all tier periods of a subscription.
     function tierPeriods(uint256 subscriptionId) external view returns (TierPeriod[] memory) {
         return tierHistory[subscriptionId];
@@ -203,11 +208,6 @@ abstract contract Support is Ownable2Step, HasPriceFeed, WithSaleStart {
     /// @notice Check whether a subscriber's subscription is currently active.
     function isActive(address supporter) public view returns (bool) {
         return _isSubscriptionActive(subscription[supporter]);
-    }
-
-    /// @notice Get the number of available tiers.
-    function totalTiers() public view returns (uint256) {
-        return tierPrices.length;
     }
 
     // --- Owner ---
