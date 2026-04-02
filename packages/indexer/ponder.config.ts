@@ -15,7 +15,7 @@ export default createConfig({
   },
   contracts: {
     Support: {
-      chain: 'sepolia',
+      chain: 'ethereum',
       abi: SupportAbi,
       address: process.env.SUPPORT_ADDRESS! as `0x${string}`,
       startBlock: Number(process.env.SUPPORT_START_BLOCK ?? 0),
